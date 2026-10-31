@@ -10,6 +10,8 @@ online ROS processing or rosbag recording:
   multiple recorded experiments through a desktop wizard.
 - `dataset_exporter.py` assembles selected processed packets into a portable
   Parquet dataset, with band powers and temporal/spatial overlap analysis.
+- `ML_tools/telemetry_classification_visualiser_tool.py` compares classified
+  packet telemetry through STD histograms and motor/IMU band-power plots.
 
 ## Requirements
 
@@ -38,6 +40,76 @@ calling `pip` directly:
 cd supporting_files
 uv add <package-name>
 ```
+
+## Telemetry classification visualiser
+
+From the repository root:
+
+```bash
+cd supporting_files
+uv sync
+uv run python ML_tools/telemetry_classification_visualiser_tool.py
+```
+
+The installed equivalent is `uv run legwheel-telemetry-visualiser`. An export
+can also be opened directly:
+
+```bash
+uv run python ML_tools/telemetry_classification_visualiser_tool.py \
+  --dataset /path/to/Exported_Datasets/NAME_HASH
+```
+
+Choose **Open dataset folder…**, or select an exported packet with **Open Parquet
+file…**. Both load **all** `packets/*.parquet` shards from that export, not just
+one file. `runs.parquet` is not a packet table; selecting it locates the companion
+packet folder. Only required numerical/grouping columns are loaded; embedded
+images are not decoded. Loading runs in a cancellable background worker.
+
+- The persistent terrain tree groups physical setups (e.g. `KK_01`) and offers
+  individual terrain/light children (`KK_01_L1`). Parent checkboxes control all
+  their children. Unknown IDs remain explicitly selectable.
+- Class checkboxes and clickable plot legends control the same four global
+  class selections. Colours stay consistent across all three tabs. Unlabelled
+  and unsupported classes are counted separately and excluded from plots.
+- **Motor standard deviations** displays six histograms: hip/knee/wheel
+  velocity and effort. Each valid packet contributes one within-window STD.
+  Choose spectral or local patch windows; the default is spectral. Computation
+  uses the validity mask and finite samples, requires at least two samples, and
+  uses population STD (`ddof=0`). Invalid measurements remain missing, not zero.
+- **Histogram** switches between probability density (default) and packet
+  counts. Bin count is configurable. Every class uses the same edges within a
+  channel. Density is normalized separately for each visible class, in the
+  original STD units, including when the horizontal axis is logarithmic.
+- **Motor band powers** and **IMU band powers** each display six plots. They
+  show the equal-packet arithmetic mean of saved absolute powers in each saved
+  frequency band. Error bars describe **between-packet sample STD** (`ddof=1`),
+  not uncertainty in the mean or confidence intervals. Type a multiplier from
+  **0 to 3**, default **2**, and press Enter. A single valid value shows its
+  mean without an error bar. Null/nonfinite/negative powers are excluded per
+  measurement; the right panel shows actual contributor counts per channel.
+- **Value scale** switches histogram x-axes and band-power y-axes between
+  linear and logarithmic. Log histograms use logarithmically spaced common
+  edges. Zero STD values and zero class/band means remain in the underlying
+  statistics but are omitted from log display and counted in the summary.
+  Power statistics and SD bars are calculated in linear units in both views.
+  Lower SD limits at or below zero are truncated at a positive plot floor and
+  marked with **▼**, with the truncation count shown in the summary.
+- The right panel continuously reports selected packet/class/run/setup counts,
+  valid measurements in the active tab, exclusions and input diagnostics. The
+  Matplotlib toolbar supports zooming, panning and saving the active figure.
+
+Every packet has equal weight, regardless of run length. Temporal/spatial
+overlap and transition-adjacent packets are retained. The tool does not claim
+that packets are independent. Band powers are read exactly as exported;
+changing the STD window does not recalculate them. Different band layouts
+within one dataset are rejected rather than silently averaged together.
+Existing odd-length FFT exports can underweight their highest frequency bin;
+this visualiser does not silently correct or rewrite that calculation.
+
+All source files and labels remain unchanged. No model is trained. The
+`ML_tools.analysis` module is independent of Qt and preserves packet/run/terrain
+identities alongside cached feature arrays so future training and grouped
+evaluation can reuse the same calculations.
 
 ## Dataset browser
 
