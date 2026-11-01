@@ -6,32 +6,40 @@ from collections import Counter
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QLocale, QThread, QTimer, Qt, Signal
+from PySide6.QtCore import Qt, QThread, QTimer, Signal
 from PySide6.QtWidgets import (
-    QCheckBox, QComboBox, QDoubleSpinBox, QFileDialog, QGridLayout, QGroupBox,
-    QHBoxLayout, QHeaderView, QLabel, QMainWindow, QMessageBox, QPlainTextEdit,
-    QProgressBar, QPushButton, QSpinBox, QSplitter, QTabWidget, QTreeWidget,
-    QTreeWidgetItem, QVBoxLayout, QWidget,
+    QCheckBox,
+    QComboBox,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QHeaderView,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPlainTextEdit,
+    QProgressBar,
+    QPushButton,
+    QSpinBox,
+    QSplitter,
+    QTabWidget,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
 )
 
 from .analysis import (
-    CLASS_COLORS, CLASS_NAMES, LoadCancelled, TelemetryDataset, load_dataset,
+    CLASS_COLORS,
+    CLASS_NAMES,
+    LoadCancelled,
+    TelemetryDataset,
+    load_dataset,
 )
 from .plots import PlotPanel, PlotReport, channel_title
-
-
-class StdMultiplierSpinBox(QDoubleSpinBox):
-    """Accept either decimal separator regardless of the desktop's locale."""
-
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        self.setLocale(QLocale.c())
-
-    def validate(self, text, position):
-        return super().validate(text.replace(",", "."), position)
-
-    def valueFromText(self, text):
-        return super().valueFromText(text.replace(",", "."))
+from .qt_helpers import DecimalSpinBox as StdMultiplierSpinBox
+from .training_page import TrainingPage
 
 
 class DatasetLoader(QThread):
@@ -90,7 +98,9 @@ class VisualiserWindow(QMainWindow):
         self.open_file_button = QPushButton("Open Parquet file…")
         self.path_label = QLabel("Choose an exported Parquet dataset to begin.")
         self.path_label.setTextFormat(Qt.TextFormat.PlainText)
-        self.path_label.setTextInteractionFlags(Qt.TextInteractionFlag.TextSelectableByMouse)
+        self.path_label.setTextInteractionFlags(
+            Qt.TextInteractionFlag.TextSelectableByMouse
+        )
         self.path_label.setWordWrap(True)
         self.open_button.clicked.connect(self.choose_dataset)
         self.open_file_button.clicked.connect(self.choose_parquet)
@@ -99,16 +109,35 @@ class VisualiserWindow(QMainWindow):
         header.addWidget(self.path_label, 1)
         outer.addLayout(header)
 
+        # Dataset loading is shared; plot visibility and training assignments
+        # are deliberately separate so hiding a class cannot alter an experiment.
+        self.pages = QTabWidget()
+        exploration = QWidget()
+        exploration_layout = QVBoxLayout(exploration)
+        exploration_layout.setContentsMargins(0, 0, 0, 0)
+        self.pages.addTab(exploration, "Data exploration")
+        self.training_page = TrainingPage()
+        self.pages.addTab(self.training_page, "Model training and comparison")
+        self.training_page.dataset_requested.connect(self.open_dataset)
+        self.training_page.busy_changed.connect(self._training_busy_changed)
+        outer.addWidget(self.pages, 1)
+
         self.controls = QWidget()
         filters = QHBoxLayout(self.controls)
         filters.setContentsMargins(0, 0, 0, 0)
         terrain_box = QGroupBox("Terrain setups and lighting — shared by all tabs")
         terrain_layout = QVBoxLayout(terrain_box)
         self.terrain_tree = QTreeWidget()
-        self.terrain_tree.setHeaderLabels(("Physical setup / terrain and light", "Labelled"))
+        self.terrain_tree.setHeaderLabels(
+            ("Physical setup / terrain and light", "Labelled")
+        )
         self.terrain_tree.header().setStretchLastSection(False)
-        self.terrain_tree.header().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
-        self.terrain_tree.header().setSectionResizeMode(1, QHeaderView.ResizeMode.ResizeToContents)
+        self.terrain_tree.header().setSectionResizeMode(
+            0, QHeaderView.ResizeMode.Stretch
+        )
+        self.terrain_tree.header().setSectionResizeMode(
+            1, QHeaderView.ResizeMode.ResizeToContents
+        )
         self.terrain_tree.setMinimumWidth(320)
         terrain_layout.addWidget(self.terrain_tree)
         terrain_buttons = QHBoxLayout()
@@ -132,7 +161,9 @@ class VisualiserWindow(QMainWindow):
         self.window_combo = QComboBox()
         self.window_combo.addItem("Spectral window", "spectral")
         self.window_combo.addItem("Local patch window", "local")
-        self.window_combo.setToolTip("Changes within-packet STD only. Band powers always use saved spectral windows.")
+        self.window_combo.setToolTip(
+            "Changes within-packet STD only. Band powers always use saved spectral windows."
+        )
         self.histogram_mode = QComboBox()
         self.histogram_mode.addItem("Probability density", True)
         self.histogram_mode.addItem("Packet count", False)
@@ -145,7 +176,9 @@ class VisualiserWindow(QMainWindow):
         self.bins_spin.setRange(5, 200)
         self.bins_spin.setValue(30)
         self.bins_spin.setKeyboardTracking(False)
-        self.bins_spin.setToolTip("Identical bin edges for all selected classes within each channel.")
+        self.bins_spin.setToolTip(
+            "Identical bin edges for all selected classes within each channel."
+        )
         self.uncertainty_spin = StdMultiplierSpinBox()
         self.uncertainty_spin.setRange(0.0, 3.0)
         self.uncertainty_spin.setDecimals(2)
@@ -153,7 +186,9 @@ class VisualiserWindow(QMainWindow):
         self.uncertainty_spin.setValue(2.0)
         self.uncertainty_spin.setSuffix(" × STD")
         self.uncertainty_spin.setKeyboardTracking(False)
-        self.uncertainty_spin.setToolTip("Type 0–3 and press Enter. Bars show mean ± this many between-packet sample standard deviations.")
+        self.uncertainty_spin.setToolTip(
+            "Type 0–3 and press Enter. Bars show mean ± this many between-packet sample standard deviations."
+        )
         settings.addWidget(QLabel("Histogram bins"), 2, 0)
         settings.addWidget(self.bins_spin, 2, 1)
         settings.addWidget(QLabel("Band-power error bars"), 2, 2)
@@ -164,17 +199,22 @@ class VisualiserWindow(QMainWindow):
         self.scale_combo.addItem("Logarithmic", True)
         settings.addWidget(QLabel("Value scale"), 3, 0)
         settings.addWidget(self.scale_combo, 3, 1)
-        hint = QLabel("Log: histogram x-axis; band-power y-axis. Click a legend to toggle its class.")
+        hint = QLabel(
+            "Log: histogram x-axis; band-power y-axis. Click a legend to toggle its class."
+        )
         hint.setWordWrap(True)
         settings.addWidget(hint, 3, 2, 1, 2)
         filters.addWidget(settings_box, 5)
         self.controls.setMaximumHeight(215)
-        outer.addWidget(self.controls)
+        exploration_layout.addWidget(self.controls)
 
         body = QSplitter(Qt.Orientation.Horizontal)
         self.tabs = QTabWidget()
         self.panels = [PlotPanel(kind) for kind in ("std", "motor", "imu")]
-        for panel, title in zip(self.panels, ("Motor standard deviations", "Motor band powers", "IMU band powers")):
+        for panel, title in zip(
+            self.panels,
+            ("Motor standard deviations", "Motor band powers", "IMU band powers"),
+        ):
             self.tabs.addTab(panel, title)
             panel.class_toggled.connect(self.toggle_class)
         body.addWidget(self.tabs)
@@ -189,14 +229,16 @@ class VisualiserWindow(QMainWindow):
         summary_layout.addWidget(self.count_label)
         self.summary = QPlainTextEdit()
         self.summary.setReadOnly(True)
-        self.summary.setPlainText("Open an exported dataset.\n\nAll four labelled classes are enabled initially.")
+        self.summary.setPlainText(
+            "Open an exported dataset.\n\nAll four labelled classes are enabled initially."
+        )
         summary_layout.addWidget(self.summary, 1)
         summary_box.setMinimumWidth(270)
         body.addWidget(summary_box)
         body.setStretchFactor(0, 5)
         body.setStretchFactor(1, 1)
         body.setSizes((1240, 310))
-        outer.addWidget(body, 1)
+        exploration_layout.addWidget(body, 1)
 
         self.progress = QProgressBar()
         self.progress.setMaximumWidth(220)
@@ -221,21 +263,26 @@ class VisualiserWindow(QMainWindow):
         self.no_terrains_button.clicked.connect(lambda: self.set_all_terrains(False))
 
     def choose_dataset(self):
-        path = QFileDialog.getExistingDirectory(self, "Choose exported dataset folder",
-                                               str(self.dataset.root) if self.dataset else "")
+        path = QFileDialog.getExistingDirectory(
+            self,
+            "Choose exported dataset folder",
+            str(self.dataset.root) if self.dataset else "",
+        )
         if path:
             self.open_dataset(Path(path))
 
     def choose_parquet(self):
         path, _ = QFileDialog.getOpenFileName(
-            self, "Choose an exported packet Parquet file",
-            str(self.dataset.root) if self.dataset else "", "Parquet files (*.parquet)",
+            self,
+            "Choose an exported packet Parquet file",
+            str(self.dataset.root) if self.dataset else "",
+            "Parquet files (*.parquet)",
         )
         if path:
             self.open_dataset(Path(path))
 
     def open_dataset(self, path: Path):
-        if self.loader is not None:
+        if self.loader is not None or self.training_page.is_busy:
             return
         self.loader = DatasetLoader(path, self)
         self.loader.loaded.connect(self.set_dataset)
@@ -245,6 +292,7 @@ class VisualiserWindow(QMainWindow):
         self.open_button.setEnabled(False)
         self.open_file_button.setEnabled(False)
         self.controls.setEnabled(False)
+        self.training_page.setEnabled(False)
         self.progress.setRange(0, 0)
         self.progress.show()
         self.cancel_button.setEnabled(True)
@@ -258,11 +306,14 @@ class VisualiserWindow(QMainWindow):
 
     def cancel_load(self):
         if self.loader:
+            # A cancelled "Open experiment" must not resume on a later load.
+            self.training_page.pending_experiment = None
             self.loader.requestInterruption()
             self.cancel_button.setEnabled(False)
             self.statusBar().showMessage("Cancelling dataset load…")
 
     def _load_failed(self, message: str):
+        self.training_page.pending_experiment = None
         if not self._closing:
             QMessageBox.critical(self, "Cannot open dataset", message)
 
@@ -272,10 +323,17 @@ class VisualiserWindow(QMainWindow):
         self.open_button.setEnabled(True)
         self.open_file_button.setEnabled(True)
         self.controls.setEnabled(True)
+        self.training_page.setEnabled(True)
         self.progress.hide()
         self.cancel_button.hide()
         self.statusBar().showMessage("Ready. Source datasets are read-only.")
         if self._closing:
+            self.close()
+
+    def _training_busy_changed(self, busy: bool):
+        self.open_button.setEnabled(not busy and self.loader is None)
+        self.open_file_button.setEnabled(not busy and self.loader is None)
+        if self._closing and not busy and self.loader is None:
             self.close()
 
     def set_dataset(self, dataset: TelemetryDataset):
@@ -287,11 +345,21 @@ class VisualiserWindow(QMainWindow):
         self.terrain_tree.blockSignals(True)
         self.terrain_tree.clear()
         self.terrain_items.clear()
-        totals = Counter(key for key, label in zip(dataset.terrain_keys, dataset.class_ids) if label in range(4))
+        totals = Counter(
+            key
+            for key, label in zip(dataset.terrain_keys, dataset.class_ids)
+            if label in range(4)
+        )
         for setup in sorted({key[0] for key in dataset.terrain_keys}):
             keys = sorted({key for key in dataset.terrain_keys if key[0] == setup})
-            parent = QTreeWidgetItem(self.terrain_tree, (setup, str(sum(totals[key] for key in keys))))
-            parent.setFlags(parent.flags() | Qt.ItemFlag.ItemIsAutoTristate | Qt.ItemFlag.ItemIsUserCheckable)
+            parent = QTreeWidgetItem(
+                self.terrain_tree, (setup, str(sum(totals[key] for key in keys)))
+            )
+            parent.setFlags(
+                parent.flags()
+                | Qt.ItemFlag.ItemIsAutoTristate
+                | Qt.ItemFlag.ItemIsUserCheckable
+            )
             for key in keys:
                 child = QTreeWidgetItem(parent, (key[1], str(totals[key])))
                 child.setFlags(child.flags() | Qt.ItemFlag.ItemIsUserCheckable)
@@ -306,11 +374,14 @@ class VisualiserWindow(QMainWindow):
         self.dirty_tabs = {0, 1, 2}
         self.reports.clear()
         self.refresh()
+        self.training_page.set_dataset(dataset)
 
     def set_all_terrains(self, selected: bool):
         self.terrain_tree.blockSignals(True)
         for child in self.terrain_items.values():
-            child.setCheckState(0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked)
+            child.setCheckState(
+                0, Qt.CheckState.Checked if selected else Qt.CheckState.Unchecked
+            )
         self.terrain_tree.blockSignals(False)
         self.schedule_refresh()
 
@@ -318,10 +389,18 @@ class VisualiserWindow(QMainWindow):
         self.class_checks[class_id].toggle()
 
     def selected_classes(self) -> set[int]:
-        return {class_id for class_id, checkbox in enumerate(self.class_checks) if checkbox.isChecked()}
+        return {
+            class_id
+            for class_id, checkbox in enumerate(self.class_checks)
+            if checkbox.isChecked()
+        }
 
     def selected_terrains(self):
-        return {key for key, item in self.terrain_items.items() if item.checkState(0) == Qt.CheckState.Checked}
+        return {
+            key
+            for key, item in self.terrain_items.items()
+            if item.checkState(0) == Qt.CheckState.Checked
+        }
 
     def schedule_refresh(self, *_args):
         self.dirty_tabs = {0, 1, 2}
@@ -339,9 +418,13 @@ class VisualiserWindow(QMainWindow):
         index = self.tabs.currentIndex()
         if index in self.dirty_tabs:
             self.reports[index] = self.panels[index].render(
-                dataset, selection, classes,
-                window=self.window_combo.currentData(), bins=self.bins_spin.value(),
-                density=self.histogram_mode.currentData(), multiplier=self.uncertainty_spin.value(),
+                dataset,
+                selection,
+                classes,
+                window=self.window_combo.currentData(),
+                bins=self.bins_spin.value(),
+                density=self.histogram_mode.currentData(),
+                multiplier=self.uncertainty_spin.value(),
                 logarithmic=self.scale_combo.currentData(),
             )
             self.dirty_tabs.discard(index)
@@ -352,53 +435,82 @@ class VisualiserWindow(QMainWindow):
         terrain_mask = dataset.terrain_selection(terrains)
         count = int(selection.sum())
         self.count_label.setText(f"{count:,} packets")
-        selected_runs = {source for source, keep in zip(dataset.source_ids, selection) if keep}
-        selected_setups = {key[0] for key, keep in zip(dataset.terrain_keys, selection) if keep}
+        selected_runs = {
+            source for source, keep in zip(dataset.source_ids, selection) if keep
+        }
+        selected_setups = {
+            key[0] for key, keep in zip(dataset.terrain_keys, selection) if keep
+        }
         lines = [
             f"Loaded: {len(dataset.packet_ids):,} packets",
             f"Labelled: {int(np.isin(dataset.class_ids, range(4)).sum()):,}",
             f"Selected runs: {len(selected_runs)}",
             f"Selected physical setups: {len(selected_setups)}",
-            "", "Classes: selected / in checked terrains",
+            "",
+            "Classes: selected / in checked terrains",
         ]
         for class_id, name in enumerate(CLASS_NAMES):
-            available = int(np.count_nonzero(terrain_mask & (dataset.class_ids == class_id)))
-            lines.append(f"{class_id} {name}: {available if class_id in classes else 0} / {available}")
+            available = int(
+                np.count_nonzero(terrain_mask & (dataset.class_ids == class_id))
+            )
+            lines.append(
+                f"{class_id} {name}: {available if class_id in classes else 0} / {available}"
+            )
         lines += [
-            "", f"Unlabelled in checked terrains: {int(np.count_nonzero(terrain_mask & (dataset.class_ids == -1)))}",
+            "",
+            f"Unlabelled in checked terrains: {int(np.count_nonzero(terrain_mask & (dataset.class_ids == -1)))}",
             f"Unsupported labels: {int(np.count_nonzero(terrain_mask & (dataset.class_ids == -2)))}",
-            "", "Measurements used in this tab:",
+            "",
+            "Measurements used in this tab:",
         ]
-        for name, numbers in zip(self.panels[self.tabs.currentIndex()].channels, report.counts):
+        for name, numbers in zip(
+            self.panels[self.tabs.currentIndex()].channels, report.counts
+        ):
             lines.append(f"{channel_title(name)}: {numbers}")
         if report.omitted_nonpositive:
             noun = "STD values" if self.tabs.currentIndex() == 0 else "class/band means"
-            lines += ["", f"Log view omits {report.omitted_nonpositive} nonpositive {noun}."]
+            lines += [
+                "",
+                f"Log view omits {report.omitted_nonpositive} nonpositive {noun}.",
+            ]
         if report.clipped_error_bars:
-            lines += ["", f"{report.clipped_error_bars} lower error limits cross zero.",
-                      "▼ marks truncation at the positive plot floor."]
+            lines += [
+                "",
+                f"{report.clipped_error_bars} lower error limits cross zero.",
+                "▼ marks truncation at the positive plot floor.",
+            ]
         lines += [
-            "", "Equal weight per packet.", "Overlapping packets are retained.",
+            "",
+            "Equal weight per packet.",
+            "Overlapping packets are retained.",
             "Unlabelled packets are excluded.",
-            "", "Within-window STD: population (ddof=0).",
-            "Band-power bars: mean ± " + f"{self.uncertainty_spin.value():g} × sample STD (ddof=1).",
+            "",
+            "Within-window STD: population (ddof=0).",
+            "Band-power bars: mean ± "
+            + f"{self.uncertainty_spin.value():g} × sample STD (ddof=1).",
             "Bars describe spread, not confidence intervals.",
             "A single value has no sample-STD bar.",
-            "", "Band powers are read as exported.", "Changing STD window does not change powers.",
+            "",
+            "Band powers are read as exported.",
+            "Changing STD window does not change powers.",
         ]
         if dataset.export_version:
             lines.append(f"Export version: {dataset.export_version}")
         if dataset.export_version == "1.1":
-            lines += ["", "Older odd-length FFT spectra may underweight",
-                      "the highest bin. No correction is applied here."]
+            lines += [
+                "",
+                "Older odd-length FFT spectra may underweight",
+                "the highest bin. No correction is applied here.",
+            ]
         if dataset.issues:
             lines += ["", "Input diagnostics:", *dataset.issues]
         self.summary.setPlainText("\n".join(lines))
 
     def closeEvent(self, event):
-        if self.loader is not None:
+        if self.loader is not None or self.training_page.is_busy:
             self._closing = True
             self.cancel_load()
+            self.training_page.cancel_for_close()
             event.ignore()
             return
         super().closeEvent(event)

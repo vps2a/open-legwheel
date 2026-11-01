@@ -4,6 +4,7 @@ version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
     "datasets>=4.0",
+    "joblib>=1.6.0",
     "matplotlib>=3.11.2",
     "nbformat>=4.2.0",
     "numpy>=2.5.3",
@@ -12,6 +13,7 @@ dependencies = [
     "pyarrow>=21.0.0",
     "pyside6>=6.11.2",
     "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
     "sympy>=1.14.0",
 ]
 
