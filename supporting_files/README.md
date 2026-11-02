@@ -10,6 +10,9 @@ online ROS processing or rosbag recording:
   multiple recorded experiments through a desktop wizard.
 - `dataset_exporter.py` assembles selected processed packets into a portable
   Parquet dataset, with band powers and temporal/spatial overlap analysis.
+- `ML_tools/telemetry_classification_visualiser_tool.py` compares classified
+  packet telemetry through STD histograms and motor/IMU band-power plots, and
+  trains/evaluates logistic regression, linear SVM and RBF SVM models.
 
 ## Requirements
 
@@ -38,6 +41,189 @@ calling `pip` directly:
 cd supporting_files
 uv add <package-name>
 ```
+
+## Telemetry classification visualiser
+
+From the repository root:
+
+```bash
+cd supporting_files
+uv sync
+uv run python ML_tools/telemetry_classification_visualiser_tool.py
+```
+
+The installed equivalent is `uv run legwheel-telemetry-visualiser`. An export
+can also be opened directly:
+
+```bash
+uv run python ML_tools/telemetry_classification_visualiser_tool.py \
+  --dataset /path/to/Exported_Datasets/NAME_HASH
+```
+
+Choose **Open dataset folder…**, or select an exported packet with **Open Parquet
+file…**. Both load **all** `packets/*.parquet` shards from that export, not just
+one file. `runs.parquet` is not a packet table; selecting it locates the companion
+packet folder. Only required numerical/grouping columns are loaded; embedded
+images are not decoded. Loading runs in a cancellable background worker.
+
+- **Export DPI** in the shared top bar controls the resolution of all images
+  saved through plot toolbars and **Save experiment…**. It defaults to **300**
+  and accepts **72–1200 DPI**; type a value and press Enter. Choose 600 DPI for
+  more detail. A fixed-size figure exported at 600 DPI has twice the width and
+  height in pixels of its 300 DPI export. Screen plots keep their normal DPI.
+  Changing this setting does not invalidate trained models. Experiment metadata
+  records the DPI used for its saved figures. PDF/SVG retain vector text/lines;
+  the DPI setting controls raster output and any embedded raster content.
+- The persistent terrain tree groups physical setups (e.g. `KK_01`) and offers
+  individual terrain/light children (`KK_01_L1`). Parent checkboxes control all
+  their children. Unknown IDs remain explicitly selectable.
+- Class checkboxes and clickable plot legends control the same four global
+  class selections. Colours stay consistent across all three tabs. Unlabelled
+  and unsupported classes are counted separately and excluded from plots.
+- **Motor standard deviations** displays six histograms: hip/knee/wheel
+  velocity and effort. Each valid packet contributes one within-window STD.
+  Choose spectral or local patch windows; the default is spectral. Computation
+  uses the validity mask and finite samples, requires at least two samples, and
+  uses population STD (`ddof=0`). Invalid measurements remain missing, not zero.
+- **Histogram** switches between probability density (default) and packet
+  counts. Bin count is configurable. Every class uses the same edges within a
+  channel. Density is normalized separately for each visible class, in the
+  original STD units, including when the horizontal axis is logarithmic.
+- **Motor band powers** and **IMU band powers** each display six plots. They
+  show the equal-packet arithmetic mean of saved absolute powers in each saved
+  frequency band. Error bars describe **between-packet sample STD** (`ddof=1`),
+  not uncertainty in the mean or confidence intervals. Type a multiplier from
+  **0 to 3**, default **2**, and press Enter. A single valid value shows its
+  mean without an error bar. Null/nonfinite/negative powers are excluded per
+  measurement; the right panel shows actual contributor counts per channel.
+- **Value scale** switches histogram x-axes and band-power y-axes between
+  linear and logarithmic. Log histograms use logarithmically spaced common
+  edges. Zero STD values and zero class/band means remain in the underlying
+  statistics but are omitted from log display and counted in the summary.
+  Power statistics and SD bars are calculated in linear units in both views.
+  Lower SD limits at or below zero are truncated at a positive plot floor and
+  marked with **▼**, with the truncation count shown in the summary.
+- The right panel continuously reports selected packet/class/run/setup counts,
+  valid measurements in the active tab, exclusions and input diagnostics. The
+  Matplotlib toolbar supports zooming, panning and saving the active figure.
+
+Every packet has equal weight, regardless of run length. Temporal/spatial
+overlap and transition-adjacent packets are retained. The tool does not claim
+that packets are independent. Band powers are read exactly as exported;
+changing the STD window does not recalculate them. Different band layouts
+within one dataset are rejected rather than silently averaged together.
+Existing odd-length FFT exports can underweight their highest frequency bin;
+this visualiser does not silently correct or rewrite that calculation.
+
+All source files and labels remain unchanged. The **Data exploration** page is
+separate from **Model training and comparison**: hiding a class or terrain in
+the plots does not change training assignments. The dataset selector is shared.
+
+### Model training and comparison
+
+This page has three tabs and a persistent summary of eligible training,
+validation and reserved test packets. Models use only class **0 (Firm)** and
+**1 (Loose)**. Loose is the positive class. Every model receives the same feature
+columns and eligible packets within a comparison.
+
+1. **Data split:** assign entire runs to Training, Validation, Testing or
+   Excluded. All runs initially start Excluded; the tool never silently makes
+   a random packet split. **New-setup** mode keeps each physical terrain setup
+   together across recordings and lighting. Use the setup's partition selector;
+   individual run selectors are disabled. **New-run** mode permits different
+   recordings of the same physical ground in different partitions. A setup
+   selector can still assign all its runs together. Switching back to new-setup
+   mode clears conflicting assignments within a setup. Runs with no binary
+   labels are excluded. Counts in the tree are before filtering; the summary
+   reports eligible counts and exclusions.
+2. **Features and models:** choose a preset or expand the feature tree to select
+   individual STD channels and motor/IMU channel-band pairs. Wheel speed and
+   both slopes are independent options. The compact preset is the default
+   (39 features with the sample export's five frequency bands). The spectral
+   window supplies both STD and mean absolute wheel speed by default. Powers
+   always come from the saved spectral windows. Band-power log transformation
+   is on initially and is independent of the exploration plot's axis scale.
+3. **Performance:** **Train all three models** fits the models on Training only
+   and displays Validation results. Select Training to inspect fitting results.
+   Reserved test packets are not scored until **Evaluate reserved test set**
+   is pressed. Evaluation never refits a model. A test set is optional; training
+   and validation must each contain both classes after filtering.
+
+**Transition filtering** is enabled initially. A binary packet is excluded if
+its closed FFT interval intersects a labelled class-2/3 packet's local patch
+interval in the same run. Optional padding extends the transition interval on
+both sides, initially by zero seconds. Transition annotations remain context
+even though they are never classification targets. Missing required timing
+in an assigned run produces an explicit error; disabling the filter is a
+deliberate alternative for older exports. Only transitions present in the
+export can be checked; this filter does not establish purity in unannotated
+areas and does not compare clocks/angles across recordings.
+
+Packets with any missing selected feature are excluded consistently for all
+models. The summary separately counts incomplete rows and transition-adjacent
+rows remaining after that check. Each packet has equal weight.
+
+Each fitted pipeline contains training-only preprocessing and its classifier:
+
+- Optional `log10` transformation affects power columns only. Each column's
+  positive floor is 1% of its smallest positive **training** power, or 1e-12
+  when all its training values are zero. Values below the floor are clipped.
+- Standardization learns its means/scales from Training only. Validation/test
+  statistics cannot change these fitted parameters.
+- Logistic regression has fixed L2 regularization, C=1, and no tuning controls.
+- Linear SVM exposes positive **C**, the margin-violation penalty. Its margin
+  is learned rather than specified directly.
+- RBF SVM exposes **C** and **gamma**. Automatic gamma uses scikit-learn's
+  `scale` rule on the transformed training features; a positive numerical
+  override is available. There is no automatic parameter search in this version.
+
+Accuracy, TPR/recall, FPR, balanced accuracy, precision, F1 and ROC AUC are shown
+for each model, with per-run metrics below. Confusion matrices show counts and
+percentages within each actual class. ROC curves use decision scores; SVM
+scores are not calibrated probabilities. A nonnegative score predicts Loose,
+equivalent to probability >=0.5 for logistic regression. The operating points
+are marked on ROC curves. Undefined rates/AUC display **N/A**, not zero.
+Metrics do not include packet-level independence claims or confidence bounds.
+
+Training runs in a background worker. Cancellation takes effect after the
+current model operation. Changing features, parameters or assignments marks
+previous results **outdated** and disables saving/test evaluation until models
+are trained again. Models that fail to converge are reported rather than
+silently accepted.
+
+### Saving and reopening experiments
+
+**Save experiment…** chooses a parent folder and creates a unique
+`telemetry_experiment_ID/` directory. It saves the exact evaluated training-set
+models; it never refits on combined training/validation data. A staged write
+publishes the folder only after completion and never overwrites an earlier one.
+
+- `logistic_regression.joblib`, `linear_svm.joblib`, `rbf_svm.joblib`: fitted
+  preprocessing/classifiers and their ordered feature definitions.
+- `experiment.json`: split assignments and exact eligible packet IDs, feature
+  settings and band edges, dataset fingerprint/location, model settings,
+  software versions, evaluation state and file checksums.
+- `metrics.csv`, `metrics_by_run.csv`, `predictions.csv`: measured results and
+  packet-level labels, predictions and decision scores. Reserved test scores
+  are absent until test evaluation has been explicitly requested.
+- CSV rates are fractions from 0 to 1; the GUI displays rates as percentages.
+  Undefined CSV metric cells are empty.
+- `figures/`: confusion matrices and ROC curves for evaluated partitions.
+- `uv.lock`: the dependency lockfile when available beside the installed tool.
+
+**Open experiment…** restores controls, fitted models and results without
+calling any training method. It uses the currently open dataset if it matches,
+otherwise loads the recorded location or asks for the relocated export. The
+fingerprint covers loaded numerical features, labels, grouping and timing;
+moving an export is allowed, while changed model inputs/labels are rejected.
+The original scikit-learn version is required, and recorded file checksums
+are verified before model loading. Joblib files contain Python objects: open
+only your own experiments or files from a trusted source.
+
+The code is separated by responsibility: `analysis.py` reads/caches packet
+measurements, `features.py` defines inputs and split/filter rules, `training.py`
+fits/evaluates models, and `experiments.py` saves/restores them. GUI modules
+coordinate these operations without duplicating the numerical calculations.
 
 ## Dataset browser
 
