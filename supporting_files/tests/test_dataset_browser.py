@@ -1,12 +1,15 @@
 import os
+import json
 from pathlib import Path
 import tempfile
 import unittest
+from unittest.mock import patch
 
 os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
 
-from PySide6.QtCore import QCoreApplication  # noqa: E402
-from PySide6.QtWidgets import QApplication  # noqa: E402
+from PySide6.QtCore import QCoreApplication, QSettings, Qt  # noqa: E402
+from PySide6.QtTest import QTest  # noqa: E402
+from PySide6.QtWidgets import QApplication, QMessageBox  # noqa: E402
 
 from legwheel_dataset_browser.model import (  # noqa: E402
     DatasetFormatError,
@@ -15,13 +18,94 @@ from legwheel_dataset_browser.model import (  # noqa: E402
 )
 from legwheel_dataset_browser.formatting import metadata_rows  # noqa: E402
 from legwheel_dataset_browser.window import DatasetBrowserWindow  # noqa: E402
+from legwheel_dataset_browser.classification import CLASSIFICATION_FIELDS  # noqa: E402
 from tests.synthetic_dataset import (  # noqa: E402
     CHANNEL_NAMES,
     create_synthetic_dataset,
 )
 
 
+def dataset_contents(root):
+    """Capture source bytes to detect accidental writes and partial saves."""
+    return {path.relative_to(root): path.read_bytes() for path in root.rglob("*") if path.is_file()}
+
+
 class DatasetModelTests(unittest.TestCase):
+    def test_open_upgrades_every_legacy_packet_and_is_idempotent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            dataset = LegWheelDataset.open(root)
+            for index in range(len(dataset)):
+                packet = dataset.load_packet(index)
+                for name in CLASSIFICATION_FIELDS:
+                    self.assertIn(name, packet.metadata)
+                    self.assertIsNone(packet.metadata[name])
+                    if packet.features is not None:
+                        self.assertIsNone(packet.features[name])
+            aggregate = json.loads((root / "features.jsonl").read_text())
+            self.assertTrue(all(aggregate[name] is None for name in CLASSIFICATION_FIELDS))
+            before = dataset_contents(root)
+            LegWheelDataset.open(root)
+            self.assertEqual(dataset_contents(root), before)
+
+    def test_manual_class_zero_replaces_automatic_label_in_all_three_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            metadata_path = root / "packets/packet_000000/metadata.json"
+            metadata = json.loads(metadata_path.read_text())
+            metadata.update(class_id=3, classification_method="automatic", model_id="model-v1")
+            metadata_path.write_text(json.dumps(metadata))
+            dataset = LegWheelDataset.open(root)
+            self.assertEqual(dataset.load_packet(0).features["model_id"], "model-v1")
+
+            dataset.classify_packet(0, 0)
+
+            packet = dataset.load_packet(0)
+            aggregate = json.loads((root / "features.jsonl").read_text())
+            for record in (packet.metadata, packet.features, aggregate):
+                self.assertEqual(record["class_id"], 0)
+                self.assertEqual(record["classification_method"], "manual")
+                self.assertIsNone(record["model_id"])
+            self.assertEqual(packet.features["along_slope_deg"], 4.25)
+
+    def test_stage1_classification_only_updates_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            dataset = LegWheelDataset.open(root)
+            before = (root / "features.jsonl").read_bytes()
+            dataset.classify_packet(1, 2)
+            packet = dataset.load_packet(1)
+            self.assertEqual(packet.metadata["class_id"], 2)
+            self.assertEqual(packet.metadata["classification_method"], "manual")
+            self.assertFalse((packet.packet_directory / "stage2").exists())
+            self.assertEqual((root / "features.jsonl").read_bytes(), before)
+
+    def test_failed_aggregate_replacement_restores_both_packet_files(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            dataset = LegWheelDataset.open(root)
+            before = dataset_contents(root)
+            replace = os.replace
+
+            def fail_aggregate(source, destination):
+                if destination == dataset.root / "features.jsonl":
+                    raise OSError("Synthetic write failure")
+                replace(source, destination)
+
+            with patch("legwheel_dataset_browser.model.os.replace", side_effect=fail_aggregate):
+                with self.assertRaises(OSError):
+                    dataset.classify_packet(0, 1)
+            self.assertEqual(dataset_contents(root), before)
+
+    def test_invalid_feature_index_does_not_partially_upgrade_metadata(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            (root / "features.jsonl").write_text("invalid json\n")
+            before = dataset_contents(root)
+            with self.assertRaises(DatasetFormatError):
+                LegWheelDataset.open(root)
+            self.assertEqual(dataset_contents(root), before)
+
     def test_imu_uncertainty_is_visible_for_stage1_and_stage2_packets(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = create_synthetic_dataset(Path(temporary) / "abc123")
@@ -97,6 +181,116 @@ class DatasetWindowSmokeTests(unittest.TestCase):
         QCoreApplication.setOrganizationName("LegWheel Browser Tests")
         QCoreApplication.setApplicationName("LegWheel Browser Tests")
         cls.application = QApplication.instance() or QApplication([])
+        cls.settings_directory = tempfile.TemporaryDirectory()
+        QSettings.setDefaultFormat(QSettings.Format.IniFormat)
+        QSettings.setPath(
+            QSettings.Format.IniFormat, QSettings.Scope.UserScope,
+            cls.settings_directory.name,
+        )
+
+    @classmethod
+    def tearDownClass(cls):
+        cls.settings_directory.cleanup()
+
+    def test_buttons_save_each_packet_and_manual_mode_carries_to_last_packet(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            window = DatasetBrowserWindow(root)
+            self.addCleanup(window.close)
+            self.assertFalse(window.manual_mode_checkbox.isChecked())
+            self.assertTrue(all(not button.isEnabled() for button in window.class_buttons))
+            before = dataset_contents(root)
+            with patch.object(
+                QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok,
+            ) as warning:
+                window.manual_mode_checkbox.click()
+                self.assertEqual(dataset_contents(root), before)
+                window.class_buttons[0].click()
+                self.assertEqual(window.packet_index, 1)
+                self.assertTrue(window.manual_mode_checkbox.isChecked())
+                self.assertEqual(window.dataset.load_packet(0).metadata["class_id"], 0)
+                window.class_buttons[3].click()
+                self.assertEqual(window.packet_index, 1)
+                self.assertEqual(window.packet.metadata["class_id"], 3)
+                warning.assert_called_once()
+
+            window.manual_mode_checkbox.click()
+            self.assertTrue(window.class_buttons[3].isChecked())
+            self.assertFalse(window.class_buttons[3].isEnabled())
+            reopened = DatasetBrowserWindow(root)
+            self.addCleanup(reopened.close)
+            self.assertFalse(reopened.manual_mode_checkbox.isChecked())
+
+    def test_cancel_keeps_manual_mode_off_and_dataset_unchanged(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            window = DatasetBrowserWindow(root)
+            self.addCleanup(window.close)
+            before = dataset_contents(root)
+            with patch.object(
+                QMessageBox, "warning", return_value=QMessageBox.StandardButton.Cancel,
+            ):
+                window.manual_mode_checkbox.click()
+            self.assertFalse(window.manual_mode_checkbox.isChecked())
+            self.assertTrue(all(not button.isEnabled() for button in window.class_buttons))
+            self.assertEqual(dataset_contents(root), before)
+
+    def test_number_shortcuts_classify_but_leave_go_to_typing_alone(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            window = DatasetBrowserWindow(root)
+            self.addCleanup(window.close)
+            window.show()
+            window.activateWindow()
+            self.application.processEvents()
+            with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok):
+                window.manual_mode_checkbox.click()
+            window.jump_packet_input.setFocus()
+            self.application.processEvents()
+            before = dataset_contents(root)
+            QTest.keyClicks(window.jump_packet_input, "1032")
+            self.assertEqual(window.jump_packet_input.text(), "1032")
+            self.assertEqual(window.packet_index, 0)
+            self.assertEqual(dataset_contents(root), before)
+
+            window.manual_mode_checkbox.setFocus()
+            self.application.processEvents()
+            QTest.keyClick(window, Qt.Key.Key_2)
+            self.assertEqual(window.packet_index, 1)
+            self.assertEqual(window.dataset.load_packet(0).metadata["class_id"], 2)
+            QTest.keyClick(window, Qt.Key.Key_1)
+            self.assertEqual(window.packet_index, 1)
+            self.assertEqual(window.packet.metadata["class_id"], 1)
+
+    def test_save_failure_does_not_advance_or_change_selection(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            window = DatasetBrowserWindow(root)
+            self.addCleanup(window.close)
+            with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok):
+                window.manual_mode_checkbox.click()
+            with (
+                patch.object(window.dataset, "classify_packet", side_effect=OSError("Read only")),
+                patch.object(QMessageBox, "critical") as error,
+            ):
+                window.class_buttons[1].click()
+            error.assert_called_once()
+            self.assertEqual(window.packet_index, 0)
+            self.assertTrue(all(not button.isChecked() for button in window.class_buttons))
+
+    def test_opening_another_dataset_resets_manual_mode_and_displays_saved_class(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = create_synthetic_dataset(Path(temporary) / "abc123")
+            other = create_synthetic_dataset(Path(temporary) / "def456")
+            LegWheelDataset.open(other).classify_packet(0, 0)
+            window = DatasetBrowserWindow(root)
+            self.addCleanup(window.close)
+            with patch.object(QMessageBox, "warning", return_value=QMessageBox.StandardButton.Ok):
+                window.manual_mode_checkbox.click()
+            self.assertTrue(window.open_dataset(other))
+            self.assertFalse(window.manual_mode_checkbox.isChecked())
+            self.assertTrue(window.class_buttons[0].isChecked())
+            self.assertFalse(window.class_buttons[0].isEnabled())
 
     def test_window_loads_and_navigates_without_writing_dataset(self):
         with tempfile.TemporaryDirectory() as temporary:

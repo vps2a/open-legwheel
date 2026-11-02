@@ -3,23 +3,32 @@ name = "supporting-files"
 version = "0.1.0"
 requires-python = ">=3.12"
 dependencies = [
+    "datasets>=4.0",
+    "joblib>=1.6.0",
     "matplotlib>=3.11.2",
     "nbformat>=4.2.0",
     "numpy>=2.5.3",
+    "pillow>=11.0.0",
     "plotly>=7.1.0",
+    "pyarrow>=21.0.0",
     "pyside6>=6.11.2",
+    "pyyaml>=6.0.3",
+    "scikit-learn>=1.9.1",
     "sympy>=1.14.0",
 ]
 
 [project.scripts]
 legwheel-dataset-browser = "legwheel_dataset_browser.app:main"
+legwheel-batch-dataset-builder = "legwheel_batch_builder.app:main"
+legwheel-dataset-exporter = "legwheel_dataset_exporter.app:main"
+legwheel-telemetry-visualiser = "ML_tools.telemetry_classification_visualiser_tool:main"
 
 [build-system]
 requires = ["setuptools>=77"]
 build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
-include = ["legwheel_dataset_browser*"]
+include = ["legwheel_dataset_browser*", "legwheel_batch_builder*", "legwheel_dataset_exporter*", "ML_tools*"]
 
 [dependency-groups]
 dev = [

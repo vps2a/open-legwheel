@@ -14,7 +14,7 @@ from .window import DatasetBrowserWindow
 
 def _arguments(arguments: list[str] | None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Browse a derived LegWheel packet dataset without modifying it."
+        description="Inspect derived LegWheel packets and manually classify terrain."
     )
     parser.add_argument(
         "--dataset",

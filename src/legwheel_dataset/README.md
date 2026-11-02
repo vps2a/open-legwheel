@@ -31,6 +31,13 @@ ros2 run legwheel_dataset build_dataset \
   --processing-config /path/to/experiment/run_1/postprocess.yaml
 ```
 
+`build_dataset` displays one continuous terminal progress bar from 0% to 100%,
+including bag reading, motion/IMU analysis, packet isolation, image recovery,
+feature extraction and report writing. The current phase appears beside the
+bar. Percentages describe completed work, not predicted elapsed time; 100% is
+shown only after the complete build succeeds. Progress is written to stderr,
+while the final dataset path remains on stdout.
+
 Run the stages separately:
 
 ```bash
@@ -108,6 +115,13 @@ prints its JSON report if accepted. It then asks a separate question before
 opening the blocking Matplotlib visualization.
 
 ## Required input
+
+The recorded experiment configuration must include a valid
+`environment.terrain_and_light_ID`, constant across the experiment's configs,
+run snapshots and dataset provenance. This case-sensitive setup ID allows ASCII
+letters, digits, underscores and hyphens, with at least one letter or digit.
+Different experiments may share an ID. Individual builds reject missing or
+conflicting IDs before analysis; use the batch builder to repair older metadata.
 
 The `--run-directory` must contain:
 
@@ -279,6 +293,47 @@ deterministic hash. Exact motion and kinematic values always remain in
 
 Every packet retains the complete RGB and depth images. It can therefore be
 examined after the original MCAP has been moved or archived.
+
+### Terrain and lighting setup identity
+
+Each new dataset writes `terrain_and_light_ID` at the top level of
+`provenance.json`, alongside the same value in
+`experiment_config.environment.terrain_and_light_ID`. The ID participates in
+the existing configuration hash, so changing it changes the normal output path.
+
+When the batch builder adds or corrects an ID in an existing provenance file,
+it preserves that dataset's identifier, folder, numerical files and packet
+classifications, and sets `requires_regeneration: true` with an explanatory
+`regeneration_reason`. A warning lists affected datasets before saving.
+These outputs cannot be skipped as reusable completed datasets. The batch
+builder creates a fresh dataset for selected runs and preserves the previous
+output if a retry uses the same path. Unselected runs remain marked for later
+regeneration. Stage 2 alone refuses flagged datasets; run the full build again.
+
+New builds set `requires_regeneration: false`. Existing numerical results and
+classifications remain in the preserved old dataset; labels are not transferred
+automatically to the newly generated packets.
+
+### Terrain classification
+
+Each packet's `metadata.json`, `stage2/features.json` and corresponding row in
+the dataset's `features.jsonl` carry the same three classification fields:
+
+- `class_id`: `0` (Firm Terrain), `1` (Loose Terrain), `2` (Firm to Loose
+  Transition), or `3` (Loose to Firm Transition);
+- `classification_method`: `"manual"` or, for a future classifier, `"automatic"`;
+- `model_id`: the future automatic classifier's identifier; currently `null`.
+
+The class describes the highlighted physical terrain patch. New packets start
+with all three fields set to `null` (unclassified). Stage 2 preserves labels
+already assigned to Stage 1 metadata, including when feature extraction fails.
+When extracting features from older Stage 1 packets, missing fields are added
+to their metadata as well.
+
+Use the standalone browser in `supporting_files` to assign manual classes.
+It upgrades missing fields in older datasets when opening them and saves each
+manual selection immediately to all applicable JSON files. Stage 1-only
+packets are labelled in metadata until their feature files are generated.
 
 ## Stage 1, Pass 1: analysing the run
 

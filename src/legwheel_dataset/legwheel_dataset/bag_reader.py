@@ -9,6 +9,7 @@ from numpy.typing import NDArray
 
 from legwheel_kinematics.projection import CameraCalibration
 from legwheel_encoder.config import TICKS_TOPIC
+from legwheel_dataset.progress import ProgressCallback
 
 
 RGB_IMAGE_TOPIC = "/legwheel_rgbd/color/image_raw"
@@ -204,7 +205,9 @@ def _deserialize(serialized, type_name: str):
     return deserialize_message(serialized, get_message(type_name))
 
 
-def index_bag(bag_directory: Path) -> BagIndex:
+def index_bag(
+    bag_directory: Path, *, progress: ProgressCallback | None = None,
+) -> BagIndex:
     """Perform a first pass without retaining high-bandwidth image data."""
     reader = _open_reader(bag_directory)
     message_types = _message_types(reader)
@@ -249,8 +252,15 @@ def index_bag(bag_directory: Path) -> BagIndex:
     if COMMANDED_TORQUE_TOPIC in message_types:
         index.streams["governed_torque_command"] = TelemetrySeries(("wheel.commanded_torque",))
 
+    message_count = reader.get_metadata().message_count if progress else 0
+    messages_read = 0
+    if progress:
+        progress(0.0, "Reading bag")
     while reader.has_next():
         topic, serialized, bag_time_ns = reader.read_next()
+        messages_read += 1
+        if progress and messages_read % 100 == 0:
+            progress(min(messages_read / max(message_count, 1), 1.0), "Reading bag")
         if topic not in READABLE_INDEX_TOPICS:
             continue
         message = _deserialize(serialized, message_types[topic])
@@ -324,18 +334,24 @@ def index_bag(bag_directory: Path) -> BagIndex:
                     float(message.linear_acceleration.z),
                 ],
             )
+    if progress:
+        progress(1.0, "Reading bag")
     return index
 
 
 def extract_selected_images(
     bag_directory: Path,
     requested: dict[tuple[str, int], Callable],
+    *,
+    progress: ProgressCallback | None = None,
 ) -> set[tuple[str, int]]:
     """Perform a second pass and deliver only images selected for packets."""
     reader = _open_reader(bag_directory)
     message_types = _message_types(reader)
     found = set()
     image_topics = {RGB_IMAGE_TOPIC, DEPTH_IMAGE_TOPIC}
+    if progress:
+        progress(0.0, "Recovering packet images")
     while reader.has_next() and len(found) < len(requested):
         topic, serialized, bag_time_ns = reader.read_next()
         if topic not in image_topics:
@@ -346,4 +362,8 @@ def extract_selected_images(
         if callback is not None and key not in found:
             callback(message)
             found.add(key)
+            if progress:
+                progress(len(found) / len(requested), "Recovering packet images")
+    if progress:
+        progress(1.0, "Recovering packet images")
     return found

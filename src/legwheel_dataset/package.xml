@@ -9,6 +9,7 @@
 
   <depend>legwheel_kinematics</depend>
   <depend>legwheel_encoder</depend>
+  <exec_depend>legwheel_experiments</exec_depend>
   <depend>rclpy</depend>
   <depend>rosbag2_py</depend>
   <depend>rosidl_runtime_py</depend>

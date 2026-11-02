@@ -7,6 +7,7 @@ from typing import Any
 
 import numpy as np
 
+from .classification import TERRAIN_CLASSES
 from .model import PacketData
 
 
@@ -65,8 +66,15 @@ def metadata_rows(packet: PacketData) -> list[tuple[str, str]]:
     """Select the packet metadata most useful during inspection."""
     metadata = packet.metadata
     features = packet.features or {}
+    class_id = metadata.get("class_id")
+    classification = "Unclassified"
+    if type(class_id) is int and 0 <= class_id < len(TERRAIN_CLASSES):
+        classification = f"{class_id} - {TERRAIN_CLASSES[class_id]}"
     return [
         ("Packet ID", str(metadata.get("packet_id", "Unavailable"))),
+        ("Terrain class", classification),
+        ("Classification method", metadata.get("classification_method") or "Unavailable"),
+        ("Classification model", metadata.get("model_id") or "Unavailable"),
         ("Experiment", str(metadata.get("experiment_id", "Unavailable"))),
         ("Run", str(metadata.get("run_number", "Unavailable"))),
         ("Lap", str(metadata.get("lap_index", "Unavailable"))),

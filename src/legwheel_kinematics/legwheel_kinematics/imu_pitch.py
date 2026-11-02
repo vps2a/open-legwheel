@@ -11,8 +11,9 @@ accuracy: camera mounting, timestamps and IMU calibration still need validation
 against a measured reference before asserting a +/-1 degree dataset accuracy.
 """
 
-import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
+import math
 from typing import Any
 
 import numpy as np
@@ -154,6 +155,8 @@ def _encoder_motion(
     encoder_times_ns: NDArray[np.int64],
     encoder_angles_rad: NDArray[np.float64],
     imu_times_ns: NDArray[np.int64],
+    *,
+    progress: Callable[[float, str], None] | None = None,
 ) -> tuple[NDArray[np.float64], NDArray[np.float64], float]:
     """Differentiate a local encoder fit, rather than a quantized tick staircase.
 
@@ -181,6 +184,11 @@ def _encoder_motion(
         angles = encoder_angles_rad[indices]
         derivatives = np.empty((len(indices), 2))
         for sample, center_s in enumerate(times_s):
+            if progress and sample % 100 == 0:
+                progress(
+                    (int(indices[sample]) + 1) / len(encoder_times_ns),
+                    "Estimating IMU pitch: encoder motion",
+                )
             first = int(np.searchsorted(times_s, center_s - _ENCODER_HALF_WINDOW_S))
             last = int(
                 np.searchsorted(
@@ -280,6 +288,8 @@ def _stationary_bias(
     encoder_times_ns: NDArray[np.int64],
     encoder_angles_rad: NDArray[np.float64],
     segments: list[NDArray[np.int64]],
+    *,
+    progress: Callable[[float, str], None] | None = None,
 ) -> tuple[float, float, NDArray[np.bool_]]:
     """Find actual recorded rest, rather than assuming the first sample is rest.
 
@@ -291,6 +301,11 @@ def _stationary_bias(
     for indices in segments:
         seconds = (times_ns[indices] - times_ns[indices[0]]).astype(float) * 1e-9
         for local_index, center_s in enumerate(seconds):
+            if progress and local_index % 100 == 0:
+                progress(
+                    (int(indices[local_index]) + 1) / len(times_ns),
+                    "Estimating IMU pitch: stationary calibration",
+                )
             first = int(np.searchsorted(seconds, center_s - 0.30))
             last = int(np.searchsorted(seconds, center_s + 0.30, side="right"))
             window = indices[first:last]
@@ -354,6 +369,7 @@ def estimate_pitch(
     imu_to_camera_rotation: Any = None,
     initial_gyro_bias_rad_s: float | None = None,
     initial_gyro_bias_uncertainty_rad_s: float | None = None,
+    progress: Callable[[float, str], None] | None = None,
 ) -> PitchTrajectory:
     """Fuse a full recorded IMU stream into the existing signed ``theta_p``.
 
@@ -372,7 +388,12 @@ def estimate_pitch(
     or outside either sensor's coverage. The original knee-based pitch is never
     consulted. Use ``PitchTrajectory.sample`` to enforce these constraints when
     selecting dataset frames.
+
+    An optional progress callback receives a work fraction from 0 to 1 and the
+    current phase. It only reports work; it never affects the numerical result.
     """
+    if progress:
+        progress(0.0, "Estimating IMU pitch: encoder motion")
     times = _timestamps(imu_times_ns, "imu_times_ns")
     encoder_times = _timestamps(encoder_times_ns, "encoder_times_ns")
     gyro = np.asarray(angular_velocity_rad_s, dtype=float)
@@ -432,7 +453,9 @@ def estimate_pitch(
     if not np.isfinite(camera_position).all():
         raise ValueError("Camera lever-arm geometry must be finite.")
     yaw_rate, yaw_acceleration, encoder_maximum_gap_s = _encoder_motion(
-        encoder_times, encoder_angles, times
+        encoder_times, encoder_angles, times,
+        progress=(lambda fraction, label: progress(0.20 * fraction, label))
+        if progress else None,
     )
     usable = (
         np.isfinite(gyro_beam).all(axis=1)
@@ -443,8 +466,12 @@ def estimate_pitch(
         & (np.max(np.abs(gyro), axis=1) < math.radians(1000.0))
     )
     segments = _segments(times, usable, maximum_gap_s)
+    if progress:
+        progress(0.20, "Estimating IMU pitch: stationary calibration")
     bias, bias_uncertainty, stationary = _stationary_bias(
-        times, gyro_beam, acceleration_beam, encoder_times, encoder_angles, segments
+        times, gyro_beam, acceleration_beam, encoder_times, encoder_angles, segments,
+        progress=(lambda fraction, label: progress(0.20 + 0.20 * fraction, label))
+        if progress else None,
     )
     bias_source = "stationary_measurements" if stationary.any() else "estimated"
     if not stationary.any() and initial_gyro_bias_rad_s is not None:
@@ -457,6 +484,12 @@ def estimate_pitch(
     recovered = np.zeros(len(times), dtype=bool)
     segment_ids = np.full(len(times), -1, dtype=np.int64)
     initialized_segments = 0
+
+    # Count both passes so progress stays monotonic across missing-data segments.
+    total_work = max(1, 2 * sum(len(indices) for indices in segments))
+    completed_work = 0
+    if progress:
+        progress(0.40, "Estimating IMU pitch: filtering")
 
     for indices in segments:
         filtered_states = np.full((len(indices), 2), np.nan)
@@ -473,6 +506,11 @@ def estimate_pitch(
         first_initialized = None
 
         for local_index, sample in enumerate(indices):
+            if progress and local_index % 100 == 0:
+                progress(
+                    0.40 + 0.60 * (completed_work + local_index) / total_work,
+                    "Estimating IMU pitch: filtering",
+                )
             timestamp = int(times[sample])
             if state is None:
                 # Circular compensation depends weakly on pitch itself. A few
@@ -603,7 +641,9 @@ def estimate_pitch(
             filtered_states[local_index] = state
             filtered_covariances[local_index] = covariance
 
+        completed_work += len(indices)
         if first_initialized is None:
+            completed_work += len(indices)
             continue
         # Rauch--Tung--Striebel smoothing is just a backward Kalman pass. It
         # stops at every missing-data boundary and never fabricates a reference
@@ -611,6 +651,13 @@ def estimate_pitch(
         smoothed_states = filtered_states.copy()
         smoothed_covariances = filtered_covariances.copy()
         for local_index in range(len(indices) - 2, first_initialized - 1, -1):
+            if progress and local_index % 100 == 0:
+                progress(
+                    0.40 + 0.60 * (
+                        completed_work + len(indices) - 1 - local_index
+                    ) / total_work,
+                    "Estimating IMU pitch: smoothing",
+                )
             next_index = local_index + 1
             smoother_gain = np.linalg.solve(
                 predicted_covariances[next_index],
@@ -629,6 +676,10 @@ def estimate_pitch(
         variance = np.maximum(0.0, smoothed_covariances[first_initialized:, 0, 0])
         uncertainty[supported] = np.sqrt(variance + _MOUNTING_UNCERTAINTY_RAD**2)
         segment_ids[supported] = initialized_segments - 1
+        completed_work += len(indices)
+
+    if progress:
+        progress(1.0, "IMU pitch estimation complete")
 
     valid = (
         recovered

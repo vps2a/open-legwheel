@@ -105,6 +105,7 @@ class PacketSamplingTest(unittest.TestCase):
         experiment = root / "experiment.yaml"
         experiment.write_text(json.dumps({
             "experiment_id": "sampling",
+            "environment": {"terrain_and_light_ID": "TL001"},
             "rig_config": {"pivot_height_m": 0.353, "beam_radius_m": 0.83},
             "leg_config": {"hip_link_length_m": 0.2, "calf_link_length_m": 0.2},
             "wheel_config": {"wheel_radius_mm": 50.0, "wheel_width_mm": 100.0},
@@ -126,7 +127,7 @@ class PacketSamplingTest(unittest.TestCase):
                 raise ValueError("rgb_patch_not_fully_visible")
             return project_track_patch(*args)
 
-        def provide_images(_directory, requests):
+        def provide_images(_directory, requests, *, progress=None):
             for (topic, _), callback in requests.items():
                 rgb = topic.endswith("color/image_raw")
                 array = np.zeros(
@@ -137,9 +138,12 @@ class PacketSamplingTest(unittest.TestCase):
                     encoding="rgb8" if rgb else "16UC1", width=64, height=48,
                     is_bigendian=False, step=array.strides[0], data=array.tobytes(),
                 ))
+            if progress:
+                progress(1.0, "Recovering packet images")
             return set(requests)
 
         output = root / "derived"
+        progress_events = []
         with (
             patch("legwheel_dataset.processor.index_bag", return_value=index),
             patch("legwheel_dataset.processor._run_motion_analysis", return_value=(
@@ -159,8 +163,19 @@ class PacketSamplingTest(unittest.TestCase):
         ):
             # A shorter FFT window must not reject a slow patch traversal.
             isolate_packets(
-                root, ProcessingConfig(spectral_window_ms=20.0), experiment, output
+                root, ProcessingConfig(spectral_window_ms=20.0), experiment, output,
+                progress=lambda fraction, label: progress_events.append((fraction, label)),
             )
+
+        fractions = [fraction for fraction, _ in progress_events]
+        self.assertEqual(fractions[-1], 1.0)
+        self.assertEqual(fractions, sorted(fractions))
+        provenance = json.loads((output / "provenance.json").read_text())
+        self.assertEqual(provenance["terrain_and_light_ID"], "TL001")
+        self.assertEqual(
+            provenance["experiment_config"]["environment"]["terrain_and_light_ID"], "TL001",
+        )
+        self.assertFalse(provenance["requires_regeneration"])
 
         records = [
             json.loads(line)
@@ -181,6 +196,9 @@ class PacketSamplingTest(unittest.TestCase):
         for record in records:
             packet = output / record["packet_path"]
             metadata = json.loads((packet / "metadata.json").read_text())
+            for name in ("class_id", "classification_method", "model_id"):
+                self.assertIn(name, metadata)
+                self.assertIsNone(metadata[name])
             centre = direction * metadata["patch_centre_motion_angle_rad"]
             expected_start_s = math.sqrt(centre - 0.05 - INITIAL_ANGLE_RAD)
             expected_end_s = math.sqrt(centre + 0.05 - INITIAL_ANGLE_RAD)

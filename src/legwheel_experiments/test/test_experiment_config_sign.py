@@ -3,7 +3,9 @@ from dataclasses import asdict
 import yaml
 
 from legwheel_experiments.data_recorder import RunRecorder
-from legwheel_experiments.schemas import ExperimentConfig, RunConfig, validate_experiment_config
+from legwheel_experiments.schemas import (
+    ExperimentConfig, RunConfig, load_experiment_config, validate_experiment_config,
+)
 
 
 def experiment_config(theta_y_kinematic_sign=-1) -> ExperimentConfig:
@@ -46,12 +48,37 @@ def experiment_config(theta_y_kinematic_sign=-1) -> ExperimentConfig:
             "wheel_radius_mm": 50.0,
             "wheel_width_mm": 100.0,
         },
-        environment={},
+        environment={"terrain_and_light_ID": "TL001"},
     )
 
 
 def test_current_geometry_accepts_negative_kinematic_sign():
     validate_experiment_config(experiment_config(-1))
+
+
+@pytest.mark.parametrize("terrain_id", [None, "", "--__", "A B", "A.B", "é1", 123, True])
+def test_terrain_and_lighting_id_is_required_and_validated(terrain_id):
+    config = experiment_config()
+    config.environment["terrain_and_light_ID"] = terrain_id
+    with pytest.raises(ValueError, match="terrain_and_light_ID"):
+        validate_experiment_config(config)
+
+
+def test_missing_terrain_id_is_rejected():
+    config = experiment_config()
+    del config.environment["terrain_and_light_ID"]
+    with pytest.raises(ValueError, match="terrain_and_light_ID"):
+        validate_experiment_config(config)
+
+
+@pytest.mark.parametrize("terrain_id", ["A-b_01", "a-B_01", "0001", "_A-1"])
+def test_terrain_id_survives_yaml_loading_without_case_or_numeric_conversion(tmp_path, terrain_id):
+    config = experiment_config()
+    config.environment["terrain_and_light_ID"] = terrain_id
+    path = tmp_path / "experiment.yaml"
+    path.write_text(yaml.safe_dump(asdict(config)))
+    loaded = load_experiment_config(path)
+    assert loaded.environment["terrain_and_light_ID"] == terrain_id
 
 
 @pytest.mark.parametrize("field", ["sensor_front_offset_m", "camera_beam_offset_m"])

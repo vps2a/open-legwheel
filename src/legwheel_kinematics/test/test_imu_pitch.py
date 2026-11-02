@@ -105,6 +105,25 @@ def _simulate(seconds, pitch, yaw, geometry, pitch_bias=0.0, imu_to_camera=None)
 
 
 class ImuPitchTest(unittest.TestCase):
+    def test_progress_is_monotonic_across_gaps_and_does_not_change_estimates(self):
+        seconds = np.arange(0.0, 4.01, 0.01)
+        seconds = seconds[(seconds < 1.8) | (seconds > 2.1)]
+        geometry = _geometry()
+        yaw = -0.4 * seconds
+        timestamps, gyro, acceleration = _simulate(seconds, 0.1, yaw, geometry)
+        arguments = (timestamps, gyro, acceleration, timestamps, yaw, geometry)
+        reference = estimate_pitch(*arguments)
+        events = []
+        with_progress = estimate_pitch(
+            *arguments, progress=lambda fraction, label: events.append((fraction, label)),
+        )
+        np.testing.assert_equal(with_progress.theta_p_rad, reference.theta_p_rad)
+        np.testing.assert_equal(with_progress.uncertainty_rad, reference.uncertainty_rad)
+        fractions = [fraction for fraction, _ in events]
+        self.assertEqual(fractions[0], 0.0)
+        self.assertEqual(fractions[-1], 1.0)
+        self.assertEqual(fractions, sorted(fractions))
+
     def test_mounting_pitch_signs_and_10_or_15_second_circles(self):
         seconds = np.arange(0.0, 4.01, 0.01)
         for mount, pitch, revolution_s, direction in (

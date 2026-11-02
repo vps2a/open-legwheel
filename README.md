@@ -414,8 +414,17 @@ wheel_config:
   wheel_radius_mm: 50.0
   wheel_width_mm: 20.0
 environment:
+  terrain_and_light_ID: "TerrainA_Light01"
   environment_description: "Describe the test surface and conditions."
 ```
+
+`environment.terrain_and_light_ID` is required. It identifies a terrain and
+lighting setup and stays constant throughout an experiment; multiple experiments
+may share the same ID. IDs are case-sensitive strings containing ASCII letters,
+digits, underscores and hyphens, with at least one letter or digit. Quote IDs
+containing only digits to preserve leading zeros. The batch dataset builder can
+add missing IDs or resolve conflicting values in older experiment files and all
+their run snapshots before analysis.
 
 `zero_on_start: true` subtracts the first accepted Arduino count when the
 encoder driver starts. `false` preserves the Arduino count. Direction inversion

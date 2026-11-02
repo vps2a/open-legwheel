@@ -46,6 +46,7 @@ def create_synthetic_dataset(root: Path) -> Path:
     )
 
     manifest_lines = []
+    feature_records = []
     for index, timestamp in enumerate((2_000_000_000, 3_000_000_000)):
         packet_id = f"packet_{index:06d}"
         packet_directory = root / "packets" / packet_id
@@ -140,6 +141,7 @@ def create_synthetic_dataset(root: Path) -> Path:
                 "valid_depth_fraction": 0.95,
             }
             _write_json(stage2 / "features.json", features)
+            feature_records.append(features)
             frequencies = np.linspace(0.0, 50.0, 51)
             power = np.ones((51, 15), dtype=float)
             np.savez_compressed(
@@ -169,6 +171,10 @@ def create_synthetic_dataset(root: Path) -> Path:
 
     (root / "manifest.jsonl").write_text(
         "\n".join(reversed(manifest_lines)) + "\n",
+        encoding="utf-8",
+    )
+    (root / "features.jsonl").write_text(
+        "".join(json.dumps(record) + "\n" for record in feature_records),
         encoding="utf-8",
     )
     return root

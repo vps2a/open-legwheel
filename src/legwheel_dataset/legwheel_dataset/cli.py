@@ -4,6 +4,7 @@ import argparse
 from pathlib import Path
 
 from legwheel_dataset.config import ProcessingConfig
+from legwheel_dataset.progress import TerminalProgress, progress_range
 from legwheel_dataset.processor import (
     extract_features,
     isolate_packets,
@@ -57,13 +58,18 @@ def build_dataset_main(args=None) -> None:
     parser = _stage1_parser("Build the complete LegWheel ML dataset.")
     options = parser.parse_args(args)
     config = ProcessingConfig.from_yaml(options.processing_config)
-    output = isolate_packets(
-        options.run_directory,
-        config,
-        options.experiment_config,
-        options.output_directory,
-    )
-    extract_features(output, config)
+    with TerminalProgress(options.run_directory.name) as progress:
+        output = isolate_packets(
+            options.run_directory,
+            config,
+            options.experiment_config,
+            options.output_directory,
+            progress=progress_range(progress.update, 0.0, 0.65),
+        )
+        extract_features(
+            output, config,
+            progress=progress_range(progress.update, 0.65, 0.99),
+        )
     print(f"Complete dataset written to {output}")
 
 

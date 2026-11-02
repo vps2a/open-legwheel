@@ -1,4 +1,4 @@
-"""Main window for the read-only LegWheel packet browser."""
+"""Main window for packet inspection and manual terrain classification."""
 
 from __future__ import annotations
 
@@ -23,6 +23,7 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .classification import TERRAIN_CLASSES
 from .model import DatasetFormatError, LegWheelDataset, PacketData
 from .widgets import (
     ImageCanvas,
@@ -34,7 +35,7 @@ from .widgets import (
 
 
 class DatasetBrowserWindow(QMainWindow):
-    """Resizable, keyboard-navigable, read-only packet inspection window."""
+    """Resizable packet browser with explicitly enabled classification controls."""
 
     SETTINGS_LAST_DATASET = "last_dataset_directory"
 
@@ -87,6 +88,31 @@ class DatasetBrowserWindow(QMainWindow):
 
         self.slope_summary = SlopeSummary()
         outer.addWidget(self.slope_summary)
+
+        classification_controls = QHBoxLayout()
+        self.class_buttons = []
+        for class_id, description in enumerate(TERRAIN_CLASSES):
+            button = QPushButton(f"{class_id} - {description}")
+            button.setCheckable(True)
+            button.setEnabled(False)
+            button.setToolTip("Classify the highlighted terrain patch and advance.")
+            # Keep an existing selection visible even when editing is disabled.
+            button.setStyleSheet(
+                "QPushButton:checked, QPushButton:checked:disabled {"
+                " background-color: #c9e7ff; color: #16324f;"
+                " border: 1px solid #6badd6; border-radius: 3px; padding: 5px; }"
+            )
+            button.clicked.connect(
+                lambda _checked=False, selected=class_id: self.classify_packet(selected)
+            )
+            self.class_buttons.append(button)
+            classification_controls.addWidget(button)
+        self.manual_mode_checkbox = QCheckBox("Manual Classification Mode")
+        self.manual_mode_checkbox.setEnabled(False)
+        self.manual_mode_checkbox.toggled.connect(self._toggle_manual_mode)
+        classification_controls.addWidget(self.manual_mode_checkbox)
+        classification_controls.addStretch(1)
+        outer.addLayout(classification_controls)
 
         body = QSplitter(Qt.Orientation.Horizontal)
         self.left_telemetry = TelemetryPanel("motor")
@@ -190,6 +216,75 @@ class DatasetBrowserWindow(QMainWindow):
         QShortcut(QKeySequence(Qt.Key.Key_Right), self).activated.connect(
             self.next_packet
         )
+        self.classification_shortcuts = []
+        for class_id in range(len(TERRAIN_CLASSES)):
+            shortcut = QShortcut(QKeySequence(str(class_id)), self)
+            # Holding a number must not classify a succession of packets.
+            shortcut.setAutoRepeat(False)
+            shortcut.setEnabled(False)
+            shortcut.activated.connect(
+                lambda selected=class_id: self.classify_packet(selected)
+            )
+            self.classification_shortcuts.append(shortcut)
+        QApplication.instance().focusChanged.connect(self._refresh_classification_shortcuts)
+
+    def _refresh_classification_shortcuts(self, *_args) -> None:
+        """Leave number keys available for typing into the Go to field."""
+        enabled = (
+            self.manual_mode_checkbox.isChecked()
+            and not isinstance(QApplication.focusWidget(), QLineEdit)
+        )
+        for shortcut in self.classification_shortcuts:
+            shortcut.setEnabled(enabled)
+
+    def _toggle_manual_mode(self, enabled: bool) -> None:
+        """Confirm once when entering manual mode; toggling never writes data."""
+        if enabled:
+            answer = QMessageBox.warning(
+                self,
+                "Manual classification",
+                "Selecting a class will immediately save it and advance to the "
+                "next packet. Any previous classification will be manually "
+                "overwritten.\n\nEnable Manual Classification Mode?",
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Ok:
+                self.manual_mode_checkbox.blockSignals(True)
+                self.manual_mode_checkbox.setChecked(False)
+                self.manual_mode_checkbox.blockSignals(False)
+        self._refresh_classification_controls()
+
+    def _refresh_classification_controls(self) -> None:
+        selected = self.packet.metadata.get("class_id") if self.packet else None
+        enabled = self.packet is not None and self.manual_mode_checkbox.isChecked()
+        for class_id, button in enumerate(self.class_buttons):
+            button.setChecked(selected == class_id)
+            button.setEnabled(enabled)
+        self._refresh_classification_shortcuts()
+
+    def classify_packet(self, class_id: int) -> None:
+        """Save immediately, then advance only after a successful write."""
+        if self.dataset is None or self.packet is None:
+            return
+        if not self.manual_mode_checkbox.isChecked():
+            return
+        try:
+            self.dataset.classify_packet(self.packet_index, class_id)
+        except (DatasetFormatError, OSError, ValueError) as error:
+            QMessageBox.critical(self, "Cannot save classification", str(error))
+            self.statusBar().showMessage(f"Classification save failed: {error}")
+            self._refresh_classification_controls()
+            return
+
+        packet_id = self.packet.metadata["packet_id"]
+        # Reopening the final packet refreshes its highlight without moving past
+        # the dataset. Every earlier selection advances to the next packet.
+        self.show_packet(min(self.packet_index + 1, len(self.dataset) - 1))
+        self.statusBar().showMessage(
+            f"Saved {packet_id}: {class_id} - {TERRAIN_CLASSES[class_id]} (manual)",
+            8000,
+        )
 
     def choose_dataset(self) -> None:
         """Ask for a configuration-hash directory and retain the last choice."""
@@ -206,7 +301,7 @@ class DatasetBrowserWindow(QMainWindow):
             self.open_dataset(Path(selected), show_error=True)
 
     def open_dataset(self, directory: Path, *, show_error: bool = True) -> bool:
-        """Validate and display a dataset without changing any source files."""
+        """Upgrade legacy classification fields, then display the dataset."""
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
             dataset = LegWheelDataset.open(directory)
@@ -221,6 +316,9 @@ class DatasetBrowserWindow(QMainWindow):
             QApplication.restoreOverrideCursor()
 
         self.dataset = dataset
+        # Manual mode is deliberately not persisted in application settings.
+        self.manual_mode_checkbox.setChecked(False)
+        self.manual_mode_checkbox.setEnabled(True)
         self.fixed_depth_limits_m = depth_limits
         self.packet_index = 0
         self.jump_packet_input.setEnabled(True)
@@ -301,6 +399,7 @@ class DatasetBrowserWindow(QMainWindow):
         self.right_telemetry.show_packet(packet)
         self.point_map_canvas.show_packet(packet)
         self.metadata_table.show_packet(packet)
+        self._refresh_classification_controls()
         self._refresh_images()
 
         assert self.dataset is not None

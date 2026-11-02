@@ -14,6 +14,7 @@ from typing import Any
 import yaml
 
 from legwheel_encoder.config import EncoderConfig
+from legwheel_experiments.terrain import TERRAIN_ID_FIELD, validate_terrain_id
 
 
 @dataclass(frozen=True)
@@ -170,6 +171,7 @@ def validate_experiment_config(config: ExperimentConfig) -> None:
 
     require_nonempty_string(config.schema_version, "schema_version")
     require_nonempty_string(config.experiment_id, "experiment_id")
+    validate_terrain_id(config.environment.get(TERRAIN_ID_FIELD))
     creation_time = require_nonempty_string(
         config.datetime_of_creation,
         "datetime_of_creation",

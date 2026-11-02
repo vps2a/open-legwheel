@@ -1,14 +1,18 @@
-"""Read and validate derived LegWheel packet datasets without modifying them."""
+"""Read packet datasets and persist terrain classifications."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 import json
+import os
 from pathlib import Path
+import tempfile
 from typing import Any
 
 import numpy as np
 from numpy.typing import NDArray
+
+from .classification import CLASSIFICATION_FIELDS, TERRAIN_CLASSES
 
 
 class DatasetFormatError(ValueError):
@@ -20,7 +24,7 @@ class PacketData:
     """All files required to display one packet.
 
     Arrays are loaded into memory and all source files are closed before this
-    object is returned. The browser never opens dataset files for writing.
+    object is returned. Classification writes are handled by LegWheelDataset.
     """
 
     index: int
@@ -72,6 +76,69 @@ def _read_npz(path: Path, *, required: bool = True) -> dict[str, NDArray]:
         raise DatasetFormatError(f"Cannot read NumPy archive {path}: {error}") from error
 
 
+def _json_text(value: Any) -> str:
+    return json.dumps(value, indent=2) + "\n"
+
+
+def _stage_file(path: Path, content: bytes) -> Path:
+    """Write beside the destination so replacement stays on one filesystem."""
+    with tempfile.NamedTemporaryFile(
+        dir=path.parent, prefix=f".{path.name}.", suffix=".tmp", delete=False,
+    ) as temporary:
+        staged = Path(temporary.name)
+        try:
+            temporary.write(content)
+            temporary.flush()
+            os.fsync(temporary.fileno())
+            if path.exists():
+                os.chmod(staged, path.stat().st_mode & 0o777)
+        except OSError:
+            staged.unlink(missing_ok=True)
+            raise
+    return staged
+
+
+def _write_files(updates: dict[Path, str]) -> None:
+    """Stage complete files, then replace them; roll back on a write error.
+
+    A failed save must not leave the metadata and feature copies disagreeing.
+    No dataset files are touched until every replacement has been staged.
+    """
+    originals: dict[Path, bytes | None] = {}
+    staged: dict[Path, Path] = {}
+    replaced: list[Path] = []
+    try:
+        for path, content in updates.items():
+            originals[path] = path.read_bytes() if path.exists() else None
+            staged[path] = _stage_file(path, content.encode("utf-8"))
+        for path, temporary in staged.items():
+            os.replace(temporary, path)
+            replaced.append(path)
+    except OSError as error:
+        failed_restores = []
+        for path in reversed(replaced):
+            try:
+                if originals[path] is None:
+                    path.unlink()
+                else:
+                    restored = _stage_file(path, originals[path])
+                    try:
+                        os.replace(restored, path)
+                    finally:
+                        restored.unlink(missing_ok=True)
+            except OSError:
+                failed_restores.append(str(path))
+        if failed_restores:
+            raise OSError(
+                "Save failed and these files could not be restored: "
+                + ", ".join(failed_restores)
+            ) from error
+        raise
+    finally:
+        for temporary in staged.values():
+            temporary.unlink(missing_ok=True)
+
+
 def unpack_mask(packed: NDArray, shape: NDArray) -> NDArray[np.bool_]:
     """Restore a bit-packed Stage 1 image mask."""
     dimensions = tuple(int(value) for value in np.asarray(shape).reshape(-1))
@@ -97,7 +164,7 @@ def crop_to_mask(
 
 
 class LegWheelDataset:
-    """Chronological, read-only view of one configuration-hash directory."""
+    """Chronological packet access with synchronized classification writes."""
 
     def __init__(
         self,
@@ -152,7 +219,9 @@ class LegWheelDataset:
         if not records:
             raise DatasetFormatError("The selected dataset manifest contains no packets.")
         records.sort(key=lambda record: int(record.get("image_time_ns", 0)))
-        return cls(root, provenance, records)
+        dataset = cls(root, provenance, records)
+        dataset._upgrade_classifications()
+        return dataset
 
     def __len__(self) -> int:
         return len(self.records)
@@ -168,6 +237,117 @@ class LegWheelDataset:
         if not packet_directory.is_dir():
             raise DatasetFormatError(f"Packet directory is missing: {packet_directory}")
         return packet_directory
+
+    def _read_feature_records(self) -> dict[str, dict[str, Any]]:
+        """Index JSONL rows by packet ID while retaining their original order."""
+        path = self.root / "features.jsonl"
+        if not path.exists():
+            return {}
+        records = {}
+        for line_number, line in enumerate(
+            path.read_text(encoding="utf-8").splitlines(), start=1,
+        ):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError as error:
+                raise DatasetFormatError(
+                    f"Invalid features.jsonl line {line_number}: {error}"
+                ) from error
+            if not isinstance(record, dict) or not isinstance(record.get("packet_id"), str):
+                raise DatasetFormatError(
+                    f"features.jsonl line {line_number} has no valid packet_id."
+                )
+            packet_id = record["packet_id"]
+            if packet_id in records:
+                raise DatasetFormatError(f"Duplicate feature record for {packet_id}.")
+            records[packet_id] = record
+        return records
+
+    def _classification_updates(
+        self,
+        record: dict[str, Any],
+        feature_records: dict[str, dict[str, Any]],
+        classification: dict[str, Any] | None = None,
+    ) -> dict[Path, str]:
+        """Prepare one packet's JSON changes without writing any files."""
+        directory = self._packet_directory(record)
+        metadata_path = directory / "metadata.json"
+        features_path = directory / "stage2" / "features.json"
+        metadata = _read_json(metadata_path)
+        features = _read_json(features_path) if features_path.exists() else None
+        packet_id = metadata.get("packet_id")
+        if not isinstance(packet_id, str):
+            raise DatasetFormatError(f"Metadata has no valid packet_id: {metadata_path}")
+        aggregate = feature_records.get(packet_id)
+
+        if classification is None:
+            # Metadata is authoritative. Fall back to an existing feature copy
+            # only for fields absent from old metadata; never erase a label.
+            sources = (metadata, features or {}, aggregate or {})
+            classification = {
+                name: next((source[name] for source in sources if name in source), None)
+                for name in CLASSIFICATION_FIELDS
+            }
+
+        updates = {}
+        for path, document in ((metadata_path, metadata), (features_path, features)):
+            if document is not None and any(
+                name not in document or document[name] != value
+                for name, value in classification.items()
+            ):
+                document.update(classification)
+                updates[path] = _json_text(document)
+
+        # Stage 1 packets have no feature files yet. Their metadata will supply
+        # the classification when the dataset writer later runs Stage 2.
+        if aggregate is None and features is not None:
+            aggregate = features.copy()
+            feature_records[packet_id] = aggregate
+        if aggregate is not None:
+            aggregate.update(classification)
+        return updates
+
+    def _upgrade_classifications(self) -> None:
+        """Upgrade every legacy packet on opening, preserving existing labels."""
+        feature_records = self._read_feature_records()
+        original_features = [record.copy() for record in feature_records.values()]
+        updates = {}
+        for record in self.records:
+            updates.update(self._classification_updates(record, feature_records))
+        for record in feature_records.values():
+            for name in CLASSIFICATION_FIELDS:
+                record.setdefault(name, None)
+        if list(feature_records.values()) != original_features:
+            updates[self.root / "features.jsonl"] = "".join(
+                json.dumps(record) + "\n" for record in feature_records.values()
+            )
+        _write_files(updates)
+
+    def classify_packet(self, index: int, class_id: int) -> None:
+        """Save one manual label to all applicable JSON files before returning."""
+        if not 0 <= index < len(self):
+            raise IndexError(f"Packet index {index} is outside this dataset.")
+        if type(class_id) is not int or not 0 <= class_id < len(TERRAIN_CLASSES):
+            raise ValueError("Terrain class must be an integer from 0 to 3.")
+
+        # Re-read files so saving a label preserves unrelated metadata/features.
+        feature_records = self._read_feature_records()
+        original_features = [record.copy() for record in feature_records.values()]
+        classification = {
+            "class_id": class_id,
+            "classification_method": "manual",
+            "model_id": None,
+        }
+        updates = self._classification_updates(
+            self.records[index], feature_records, classification,
+        )
+        if list(feature_records.values()) != original_features:
+            updates[self.root / "features.jsonl"] = "".join(
+                json.dumps(record) + "\n" for record in feature_records.values()
+            )
+        _write_files(updates)
 
     def load_packet(self, index: int) -> PacketData:
         """Load one packet by chronological index."""
