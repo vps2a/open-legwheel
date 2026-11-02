@@ -28,6 +28,7 @@ from .features import (
     prepare_data,
     require_trainable,
 )
+from .plot_export import DEFAULT_EXPORT_DPI
 from .training import TrainingCancelled, evaluate_test, train_experiment
 from .training_controls import FeaturePanel, SplitPanel
 from .training_results import ResultsPanel
@@ -72,6 +73,7 @@ class TrainingPage(QWidget):
         self.restoring = False
         self.stale = False
         self.closing = False
+        self.export_dpi = DEFAULT_EXPORT_DPI
         self._build_interface()
         self.refresh_timer = QTimer(self)
         self.refresh_timer.setSingleShot(True)
@@ -139,6 +141,12 @@ class TrainingPage(QWidget):
     @property
     def is_busy(self):
         return self.task is not None
+
+    def set_export_dpi(self, dpi: int):
+        # Export resolution is a presentation setting, not a model setting:
+        # changing it must not mark an otherwise valid experiment as outdated.
+        self.export_dpi = dpi
+        self.results.toolbar.export_dpi = dpi
 
     def set_dataset(self, dataset):
         self.restoring = True
@@ -332,7 +340,11 @@ class TrainingPage(QWidget):
             return
         QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
         try:
-            path = save_experiment(self.experiment, Path(destination))
+            path = save_experiment(
+                self.experiment,
+                Path(destination),
+                export_dpi=self.export_dpi,
+            )
             self.status.setText(f"Saved exact evaluated models and results to {path}")
         except Exception as error:  # noqa: BLE001 -- report file/serialization errors at the GUI boundary.
             QMessageBox.critical(self, "Cannot save experiment", str(error))

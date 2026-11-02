@@ -66,6 +66,14 @@ one file. `runs.parquet` is not a packet table; selecting it locates the compani
 packet folder. Only required numerical/grouping columns are loaded; embedded
 images are not decoded. Loading runs in a cancellable background worker.
 
+- **Export DPI** in the shared top bar controls the resolution of all images
+  saved through plot toolbars and **Save experiment…**. It defaults to **300**
+  and accepts **72–1200 DPI**; type a value and press Enter. Choose 600 DPI for
+  more detail. A fixed-size figure exported at 600 DPI has twice the width and
+  height in pixels of its 300 DPI export. Screen plots keep their normal DPI.
+  Changing this setting does not invalidate trained models. Experiment metadata
+  records the DPI used for its saved figures. PDF/SVG retain vector text/lines;
+  the DPI setting controls raster output and any embedded raster content.
 - The persistent terrain tree groups physical setups (e.g. `KK_01`) and offers
   individual terrain/light children (`KK_01_L1`). Parent checkboxes control all
   their children. Unknown IDs remain explicitly selectable.

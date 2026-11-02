@@ -1,6 +1,6 @@
 """Metric tables, confusion matrices and ROC curves for one frozen experiment."""
 
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from PySide6.QtCore import Qt
 from PySide6.QtWidgets import (
@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 )
 
 from .evaluation_plots import comparison_figure
+from .qt_helpers import ExportNavigationToolbar
 from .training import METRIC_NAMES, MODEL_NAMES, per_run_metrics
 
 
@@ -77,7 +78,7 @@ class ResultsPanel(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.Shape.NoFrame)
         scroll.setWidget(self.canvas)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar = ExportNavigationToolbar(self.canvas, self)
         plot_layout.addWidget(self.toolbar)
         plot_layout.addWidget(scroll, 1)
         splitter.addWidget(plots)

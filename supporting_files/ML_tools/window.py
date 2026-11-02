@@ -37,6 +37,7 @@ from .analysis import (
     TelemetryDataset,
     load_dataset,
 )
+from .plot_export import DEFAULT_EXPORT_DPI, MAX_EXPORT_DPI, MIN_EXPORT_DPI
 from .plots import PlotPanel, PlotReport, channel_title
 from .qt_helpers import DecimalSpinBox as StdMultiplierSpinBox
 from .training_page import TrainingPage
@@ -107,6 +108,17 @@ class VisualiserWindow(QMainWindow):
         header.addWidget(self.open_button)
         header.addWidget(self.open_file_button)
         header.addWidget(self.path_label, 1)
+        header.addWidget(QLabel("Export DPI"))
+        self.export_dpi_spin = QSpinBox()
+        self.export_dpi_spin.setRange(MIN_EXPORT_DPI, MAX_EXPORT_DPI)
+        self.export_dpi_spin.setValue(DEFAULT_EXPORT_DPI)
+        self.export_dpi_spin.setSingleStep(50)
+        self.export_dpi_spin.setKeyboardTracking(False)
+        self.export_dpi_spin.setToolTip(
+            "Resolution for all saved plots, including experiment figures. "
+            "Higher DPI creates sharper, larger images without resizing the screen plots."
+        )
+        header.addWidget(self.export_dpi_spin)
         outer.addLayout(header)
 
         # Dataset loading is shared; plot visibility and training assignments
@@ -251,6 +263,8 @@ class VisualiserWindow(QMainWindow):
         self.statusBar().showMessage("Ready. Source datasets are read-only.")
 
     def _connect_controls(self):
+        self.export_dpi_spin.valueChanged.connect(self._set_export_dpi)
+        self._set_export_dpi(self.export_dpi_spin.value())
         for checkbox in self.class_checks:
             checkbox.toggled.connect(self.schedule_refresh)
         self.terrain_tree.itemChanged.connect(self.schedule_refresh)
@@ -261,6 +275,11 @@ class VisualiserWindow(QMainWindow):
         self.tabs.currentChanged.connect(self.refresh)
         self.all_terrains_button.clicked.connect(lambda: self.set_all_terrains(True))
         self.no_terrains_button.clicked.connect(lambda: self.set_all_terrains(False))
+
+    def _set_export_dpi(self, dpi: int):
+        for panel in self.panels:
+            panel.toolbar.export_dpi = dpi
+        self.training_page.set_export_dpi(dpi)
 
     def choose_dataset(self):
         path = QFileDialog.getExistingDirectory(

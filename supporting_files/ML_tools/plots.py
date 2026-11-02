@@ -5,7 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 import numpy as np
-from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg, NavigationToolbar2QT
+from matplotlib.backends.backend_qtagg import FigureCanvasQTAgg
 from matplotlib.figure import Figure
 from matplotlib.lines import Line2D
 from matplotlib.ticker import LogLocator, NullFormatter
@@ -13,9 +13,16 @@ from PySide6.QtCore import Signal
 from PySide6.QtWidgets import QVBoxLayout, QWidget
 
 from .analysis import (
-    BAND_CHANNELS, CLASS_COLORS, CLASS_NAMES, IMU_CHANNELS, MOTOR_CHANNELS,
-    TelemetryDataset, histogram_edges, summarize_band_power,
+    BAND_CHANNELS,
+    CLASS_COLORS,
+    CLASS_NAMES,
+    IMU_CHANNELS,
+    MOTOR_CHANNELS,
+    TelemetryDataset,
+    histogram_edges,
+    summarize_band_power,
 )
+from .qt_helpers import ExportNavigationToolbar
 
 
 def channel_title(name: str) -> str:
@@ -50,7 +57,7 @@ class PlotPanel(QWidget):
         self.channels = IMU_CHANNELS if kind == "imu" else MOTOR_CHANNELS
         self.figure = Figure(layout="constrained")
         self.canvas = FigureCanvasQTAgg(self.figure)
-        self.toolbar = NavigationToolbar2QT(self.canvas, self)
+        self.toolbar = ExportNavigationToolbar(self.canvas, self)
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self.toolbar)

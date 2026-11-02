@@ -33,6 +33,7 @@ from .features import (
     prepare_data,
     require_trainable,
 )
+from .plot_export import DEFAULT_EXPORT_DPI, validate_export_dpi
 from .training import (
     MODEL_NAMES,
     Experiment,
@@ -59,8 +60,14 @@ def _write_csv(path: Path, rows: list[dict]) -> None:
         writer.writerows(rows)
 
 
-def save_experiment(experiment: Experiment, destination: Path) -> Path:
+def save_experiment(
+    experiment: Experiment,
+    destination: Path,
+    *,
+    export_dpi: int = DEFAULT_EXPORT_DPI,
+) -> Path:
     """Stage a complete new folder; never overwrite a previous experiment."""
+    validate_export_dpi(export_dpi)
     destination = Path(destination).expanduser().resolve()
     if not destination.is_dir():
         raise ValueError("Choose an existing destination folder.")
@@ -103,7 +110,10 @@ def save_experiment(experiment: Experiment, destination: Path) -> Path:
         (stage / "figures").mkdir()
         for role in experiment.evaluations:
             figure = comparison_figure(experiment, role)
-            FigureCanvasAgg(figure).print_png(stage / "figures" / f"{role}.png")
+            FigureCanvasAgg(figure).print_figure(
+                stage / "figures" / f"{role}.png",
+                dpi=export_dpi,
+            )
             figure.clear()
         lockfile = Path(__file__).resolve().parent.parent / "uv.lock"
         if lockfile.is_file():
@@ -112,6 +122,7 @@ def save_experiment(experiment: Experiment, destination: Path) -> Path:
             "experiment_version": EXPERIMENT_VERSION,
             "feature_schema_version": FEATURE_SCHEMA_VERSION,
             "created_utc": experiment.created_utc,
+            "plot_export_dpi": export_dpi,
             "dataset_path": str(dataset.root),
             "dataset_fingerprint": dataset.fingerprint,
             "config": asdict(experiment.config),
