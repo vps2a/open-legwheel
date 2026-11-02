@@ -1,22 +1,80 @@
 # Welcome to the Open LegWheel Dataset Project!
 
-This project aims to address the lack of traversibility data for training upcoming hybrid exploration rovers. It is an open-source project currently maintained by @vps2a - Filip Szczebak. For any suggestions or questions please feel free to reach out at filip@szczebak.com.
+This project aims to address the lack of traversability data for training future hybrid exploration rovers. It is an open-source project currently maintained by @vps2a (Filip Szczebak). If you have any suggestions or questions, please feel free to reach out at filip@szczebak.com!
+
+![Main Picture](docs/readme_images/open_legwheel_main_pic.png)
 
 # Dataset Location
 
-The collective dataset is currently stored in HuggingFace under this [link](https://huggingface.co/datasets/vps2a/open_legwheel)
+The combined dataset is hosted on [Hugging Face](https://huggingface.co/datasets/vps2a/open_legwheel). As of November 2026, it contains data from one campaign, recorded at the Kąkolewo Space Robotics Testing Centre at Poznań University of Technology.
 
 # CAD and Design Files
 
-The CAD files are available on a free platform OnShape under this [link](https://cad.onshape.com/documents/7945975a1e2987842bb7db33/w/577eb7f23b2fb39c5298f464/e/060e9628c73f0835c4b77241?renderMode=0&uiState=6ae3a08f8a82bae0df0d5337)
+The CAD files are available on the free platform [Onshape](https://cad.onshape.com/documents/7945975a1e2987842bb7db33/w/577eb7f23b2fb39c5298f464/e/060e9628c73f0835c4b77241?renderMode=0&uiState=6ae3a08f8a82bae0df0d5337). Details of the motors, controllers, and camera used are stored in the experiment configuration files uploaded to Hugging Face.
 
-# Tactile LegWheel Repository
+# Data Analysis and ML Tools
 
-ROS 2 Jazzy workspace for operating and recording experiments with the Open LegWheel rig. It integrates MAB Robotics MD80 motor controllers, a serial
+## Batch Dataset Generator
+
+After a run has been recorded as an MCAP rosbag, its telemetry must be correlated with camera images of the selected terrain patch ahead of the rover. Although individual runs can be processed as described in [this section](#build-learning-packets), this tool supports batch analysis of multiple runs and entire experiments. It generates correlated data packets within each run directory.
+
+```bash
+source /opt/ros/jazzy/setup.bash
+source install/setup.bash
+cd supporting_files
+uv sync
+uv run legwheel-batch-dataset-builder
+```
+
+## Dataset Browser
+
+Correlated telemetry and image packets can then be viewed and manually classified with the dataset browser. It displays telemetry in both local and extended windows, along with the projected point cloud, image patches, and packet metadata. Manual classification mode allows you to classify the displayed packets.
+
+```bash
+cd supporting_files
+uv sync
+uv run python dataset_browser.py
+```
+
+![Screenshot of the main screen of the dataset browser](docs/readme_images/browser_main_sshot.png)
+
+![Screenshot of the 3D screen of the dataset browser](docs/readme_images/browser_3d_sshot.png)
+
+## Dataset Exporter
+
+Once you are satisfied with the correlated data, you can export them in Parquet format using the dataset exporter. The tool combines the selected packets into one dataset and saves it, together with its metadata and a README file, in your chosen directory.
+
+```bash
+cd supporting_files
+uv sync
+uv run legwheel-dataset-exporter
+```
+
+![Screenshot of the exporter](docs/readme_images/batch_exporter_sshot.png)
+
+## Terrain Classification Viewer and Analyser
+
+The final tool in the current pipeline visualises the collected data and motor telemetry. It is tailored to building SVM and logistic regression classifiers, but it can also provide useful insight into the data and their trends. Contributions and ideas for improving this tool are especially welcome!
+
+```bash
+cd supporting_files
+uv sync
+uv run python -m ML_tools.telemetry_classification_visualiser_tool
+```
+
+![Screenshot of the band power view of the model builder](docs/readme_images/band_power_sshot.png)
+![Screenshot of the standard deviation view of the model builder](docs/readme_images/std_dev_sshot.png)
+![Screenshot of the model view of the model builder](docs/readme_images/model_sshot.png)
+
+# Main Workspace
+
+This repository is quite large, but it should be easy to navigate. I used LLMs to write what I consider an extensive README, which I hope will guide you through the operations and troubleshooting needed to get the project working on your machine (it worked on mine!).
+
+This is a ROS 2 Jazzy workspace for operating and recording experiments with the Open LegWheel rig. It integrates MAB Robotics MD80 motor controllers, a serial
 rotation encoder, an Orbbec Gemini 336 RGB-D camera, and a safety-gated
 experiment runner that records MCAP rosbags.
 
-> **Safety notice:** this repository can energise motors and command wheel
+> **Safety notice:** This repository can energise motors and command wheel
 > torque. Start with the mechanism secured, the wheel clear of people and
 > obstructions, conservative limits, and a tested hardware emergency-stop
 > procedure. Software limits are not a substitute for MD80 firmware limits or
@@ -49,7 +107,7 @@ This project is intended for **Ubuntu with ROS 2 Jazzy**. You need:
 - a MAB CANdle USB adapter and correctly configured MD80 controllers;
 - the central rotation encoder connected by USB serial;
 - an Orbbec Gemini 336 and a USB 3 cable/port when camera data is required;
-- sufficient disk space for MCAP recordings (raw RGB-D data is large).
+- sufficient disk space for MCAP recordings (raw RGB-D recordings can be large).
 
 Install build tools and runtime dependencies once:
 
@@ -270,7 +328,7 @@ Manual control is useful for a carefully supervised mechanism check. It is not
 the experiment workflow.
 
 1. Start the runtime node with `enable_control:=true`.
-2. In a second terminal start the leg command publisher:
+2. In a second terminal, start the leg command publisher:
 
    ```bash
    ros2 launch legwheel_can legwheel_controller.launch.py
@@ -286,7 +344,7 @@ the experiment workflow.
    e
    ```
 
-   The hip mirrors knee encoder position; only knee impedance settings are
+   The hip mirrors the knee encoder position; only knee impedance settings are
    operator-tunable. Type `s` at any time to publish a stop request and disable
    connected motors.
 
@@ -469,7 +527,7 @@ The camera topics recorded in every run are:
 - `/legwheel_rgbd/depth/camera_info`
 - `/legwheel_rgbd/gyro_accel/sample`
 
-In Foxglove Desktop choose **Open local file** and select the `.mcap` file under
+In Foxglove Desktop, choose **Open local file** and select the `.mcap` file under
 `run_<n>/rosbag/`. Useful panels are:
 
 | Panel | Topics or fields |
@@ -522,7 +580,7 @@ centreline radius is `beam_radius_m - wheel_width_m / 2`.
 
 All visualizers and offline analysis estimate `theta_p` from the camera IMU,
 with gyro bias estimation, circular-acceleration compensation and smoothing.
-The full camera rotation compensates `camera_front_angle_deg` when interpreting
+The full camera rotation compensates for `camera_front_angle_deg` when interpreting
 IMU vectors. Low-confidence poses remain available for packets and visualization;
 their uncertainty is saved as a feature. Only timestamps with no estimate
 (startup or genuine data gaps) are skipped. Knee angle remains telemetry and
@@ -533,8 +591,8 @@ for confidence limits and recording recommendations.
 The standalone 3D view, image overlays and URDF share
 `/legwheel/kinematic_joint_states`, produced by `kinematic_joint_state_node`.
 Each launch starts this shared publisher by default. It requires the combined
-camera IMU, `/rotation_encoder/ticks` and `/wheel/wheel_state`. Yaw converts
-ticks using experiment calibration and is refined by integrating measured wheel
+camera IMU, `/rotation_encoder/ticks` and `/wheel/wheel_state`. Yaw is derived
+from ticks using the experiment calibration and is refined by integrating measured wheel
 velocity between encoder changes. Each interval is scaled to match its encoder endpoints,
 using the same slip-correction calculation as dataset generation. All visualizers
 share this implementation, retain both travel directions and use the first
@@ -555,7 +613,7 @@ waiting for an available acquisition-time pose. Missing estimates are explicit
 barriers; finite estimates during impacts are retained. Bag seeks
 reset the streaming histories and their pitch calibration while preserving the
 recording's encoder origin. Derived datasets made before this shared tick origin,
-or without IMU pitch provenance, must be regenerated before `visualise_stream`.
+or without IMU pitch provenance, must be regenerated before running `visualise_stream`.
 
 During bag playback, the shared publisher reads `/rotation_encoder/ticks`
 directly from the bag because these `Int64` messages have no header timestamp.
@@ -593,7 +651,7 @@ ros2 launch legwheel_kinematics kinematics_visualization.launch.py \
 ros2 bag play /path/to/run_1/rosbag --clock
 ```
 
-Connect Foxglove through the normal ROS bridge. In an Image panel select the raw
+Connect Foxglove through the normal ROS bridge. In an Image panel, select the raw
 RGB or depth image and add the corresponding annotation topic:
 
 - `/legwheel/visualization/rgb_track`
@@ -714,7 +772,7 @@ resume. Only one bag player should publish `/clock` for this viewer.
    so Foxglove should display the latest message without adding another trail.
 4. Enable **`/legwheel/replay/scene`**. Cyan is the inner track, orange is the
    outer track, red is the preview patch, and yellow joins the frame origins.
-   Frame-axis colours are X red, Y green, and Z blue. Labels are included in the
+   Frame-axis colours are red for X, green for Y, and blue for Z. Labels are included in the
    markers; enabling Foxglove's transform labels as well is optional.
 5. Add a **Raw Messages** panel for **`/legwheel/replay/status`** to see the
    processed-frame count, retained voxels, skipped frames, and whether the
@@ -770,8 +828,8 @@ Restart the viewer after changing settings. Run `visualise_run --help` through
 | --- | --- | --- |
 | `--run-directory` | required | Run containing `rosbag/` and configuration snapshots. |
 | `--experiment-config` | run snapshot | Optional geometry YAML override; the original stays untouched. |
-| `--pixel-stride` | `4` | Sample every fourth row and column. Smaller retains more detail. |
-| `--voxel-size-m` | `0.01` | Retain the first measured point in each 1 cm cube. Smaller preserves more detail and uses more memory. |
+| `--pixel-stride` | `4` | Sample every fourth row and column. Smaller values retain more detail. |
+| `--voxel-size-m` | `0.01` | Retain the first measured point in each 1 cm cube. Smaller values preserve more detail and use more memory. |
 | `--max-points` | `500000` | Hard limit on retained voxels. New voxels are ignored after the limit, with a warning. |
 | `--cloud-rate-hz` | `5.0` | Maximum selected depth-frame rate, measured in bag receipt time. Does not interpolate missing camera frames. |
 | `--minimum-depth-m` | `0.15` | Reject closer depth measurements and invalid zero depth. |
@@ -808,7 +866,7 @@ surfaces caused by a calibration error.
 - Geometry uses the current shared model: inner radius `beam_radius_m -
   wheel_width_m`, outer radius `beam_radius_m`, and IMU-derived beam pitch.
   The first recorded tick defines zero yaw, preserved across playback seeks.
-  Poses outside recorded coverage or across gaps with no IMU pitch estimate reject affected clouds.
+  Clouds are rejected when their poses fall outside recorded coverage or across gaps with no IMU pitch estimate.
   Finite pitch estimates remain displayed even when confidence is low.
 - Yaw uses calibrated central-encoder ticks with wheel-odometry refinement, matching
   the dataset's interval correction without its steady-torque selection. Pauses,
@@ -859,7 +917,7 @@ Learning packet generation is strictly offline. It determines the steady-torque 
 constructs continuous encoder-corrected `theta_y(t)`, isolates a configured
 physical terrain patch without overlapping the previous saved patch, and
 attaches local telemetry from wheel entry to exit plus a fixed spectral window.
-Stage 2 saves RGB/depth crops, the complete 3D point map, a robust fitted plane, signed
+Stage 2 saves RGB/depth crops, the complete 3D point map, a robustly fitted plane, signed
 along/radial slopes, and spectra for 15 motor and IMU telemetry channels.
 Encoder motion is converted through the experiment's
 `theta_y_kinematic_sign` before any spatial projection. Recordings moving away
@@ -874,9 +932,9 @@ ros2 run legwheel_dataset create_config \
 ```
 
 The interactive creator writes `/path/to/run_1/postprocess.yaml`. It starts
-with values from that file when it already exists, otherwise falls back per
-field to a configuration in one of the three nearest earlier sibling runs,
-then to built-in defaults. At either value prompt, enter `-h` or `--help` for a
+with values from that file if it already exists. Otherwise, it falls back on a
+field-by-field basis to a configuration from one of the three nearest earlier
+sibling runs, then to built-in defaults. At either value prompt, enter `-h` or `--help` for a
 short explanation. The creator validates every change, asks before atomically
 saving, and offers to analyse the result against the recording immediately.
 After printing that JSON report, it asks separately whether to open the
@@ -1038,7 +1096,7 @@ separately in `packets/analysis_report.json`.
   stream above, then inspect `header.stamp` on RGB, depth, and IMU. The camera
   checks require three forward timestamp steps, not merely repeated callbacks.
   Images must have advanced within 2 seconds; IMU and motor/encoder state have
-  tighter 0.5 second freshness limits.
+  tighter freshness limits of 0.5 seconds.
 - **A run aborts for a stopped camera stream:** treat this as a data-integrity
   failure. Keep the generated aborted run and inspect the raw Orbbec rates and
   timestamps with rosbag and Foxglove stopped. If they degrade only while
